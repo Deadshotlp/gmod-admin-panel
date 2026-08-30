@@ -48,6 +48,36 @@ Starten:
 npm run dev
 ```
 
+## Deployen auf Pelican / Pterodactyl
+
+Als generischer NodeJS-Server. Wichtig sind zwei Einstellungen:
+
+| Variable | Wert |
+|---|---|
+| `MAIN_FILE` / Startdatei | `index.js` |
+| `AUTO_UPDATE` | `1`, wenn das Egg bei jedem Start `git pull` machen soll |
+
+`index.js` ist die Startdatei, die das Egg aufruft. Sie übernimmt den vom Panel
+zugewiesenen Port aus `SERVER_PORT`, setzt `HOSTNAME` auf `0.0.0.0` (sonst
+lauscht der Server nur auf der Container-ID und der Reverse Proxy bekommt keine
+Verbindung), baut bei Bedarf neu und startet den Standalone-Server.
+
+> Zeigt `MAIN_FILE` auf eine Datei, die es nicht gibt, bricht der Start mit
+> `Cannot find module './index.js'` ab — der Fehler kommt dann von `ts-node` aus
+> dem Egg, nicht aus dieser Anwendung.
+
+Nach einem `git pull` genügt ein Neustart: die Startdatei vergleicht die
+Änderungszeiten von `src/`, `package.json` und den Konfigurationsdateien mit dem
+letzten Build und baut nur dann neu.
+
+Die `.env` legst du direkt im Container an (`/home/container/.env`). Sie steht in
+`.gitignore` und gehört nicht ins Repository.
+
+`typescript` und die `@types/*` stehen bewusst in `dependencies` statt in
+`devDependencies`: der Container baut sich selbst, und bei `NODE_ENV=production`
+würde `npm install` die devDependencies überspringen — dann fehlt TypeScript und
+`next build` bricht ab.
+
 ## Zugang
 
 Anmeldung läuft über Steam. **Wer sich anmeldet, hat noch keinen Zugang** — die

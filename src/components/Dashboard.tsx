@@ -38,6 +38,7 @@ interface StatusResponse {
 const RELOAD_AREAS: Array<{ key: string; label: string }> = [
   { key: "jobs", label: "Jobs & Einheiten" },
   { key: "fortbildung", label: "Fortbildungen" },
+  { key: "waffen", label: "Waffen & Gewichte" },
   { key: "fraktionen", label: "Fraktionsbaum" },
   { key: "armor", label: "Rüstungen" },
   { key: "spawns", label: "Spawnpunkte" },

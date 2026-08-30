@@ -100,6 +100,7 @@ export async function sendConsoleCommand(
 export const RELOAD_AREAS = [
   "jobs",
   "fortbildung",
+  "waffen",
   "fraktionen",
   "armor",
   "spawns",

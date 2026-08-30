@@ -9,12 +9,11 @@ import type { PanelUser } from "@/lib/auth";
 const NAV: Array<{ href: string; label: string; ready: boolean }> = [
   { href: "/", label: "Übersicht", ready: true },
   { href: "/jobs", label: "Jobs & Einheiten", ready: true },
-  { href: "/fortbildungen", label: "Fortbildungen", ready: false },
-  { href: "/waffen", label: "Waffen & Gewichte", ready: false },
-  { href: "/spieler", label: "Spieler & Charaktere", ready: false },
-  { href: "/strafakten", label: "Strafakten", ready: false },
-  { href: "/audit", label: "Änderungsprotokoll", ready: false },
-  { href: "/benutzer", label: "Panel-Benutzer", ready: false },
+  { href: "/fortbildungen", label: "Fortbildungen", ready: true },
+  { href: "/waffen", label: "Waffen & Gewichte", ready: true },
+  { href: "/spieler", label: "Spieler & Charaktere", ready: true },
+  { href: "/audit", label: "Änderungsprotokoll", ready: true },
+  { href: "/benutzer", label: "Panel-Benutzer", ready: true },
 ];
 
 const ROLE_LABEL: Record<string, string> = {

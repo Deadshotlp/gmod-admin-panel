@@ -8,7 +8,7 @@ import type { PanelUser } from "@/lib/auth";
 
 const NAV: Array<{ href: string; label: string; ready: boolean }> = [
   { href: "/", label: "Übersicht", ready: true },
-  { href: "/jobs", label: "Jobs & Einheiten", ready: false },
+  { href: "/jobs", label: "Jobs & Einheiten", ready: true },
   { href: "/fortbildungen", label: "Fortbildungen", ready: false },
   { href: "/waffen", label: "Waffen & Gewichte", ready: false },
   { href: "/spieler", label: "Spieler & Charaktere", ready: false },

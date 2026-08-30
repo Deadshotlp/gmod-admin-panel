@@ -18,7 +18,17 @@ export async function GET() {
       return NextResponse.json({ error: error.message }, { status: error.status });
     }
 
-    throw error;
+    // Nicht weiterwerfen: der Client bekäme eine HTML-Fehlerseite statt JSON und
+    // könnte nichts damit anfangen. Stattdessen protokollieren und antworten.
+    console.error("[status] Berechtigungsprüfung fehlgeschlagen:", error);
+
+    return NextResponse.json(
+      {
+        error: "Anmeldung konnte nicht geprüft werden",
+        detail: (error as Error).message,
+      },
+      { status: 503 },
+    );
   }
 
   const dbMissing = missingEnv(...DB_ENV_KEYS);
@@ -61,6 +71,8 @@ export async function GET() {
       },
     });
   } catch (error) {
+    console.error("[status] Abfrage fehlgeschlagen:", error);
+
     return NextResponse.json(
       {
         error: "Datenbank nicht erreichbar",

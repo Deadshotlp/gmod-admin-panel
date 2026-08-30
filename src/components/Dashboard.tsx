@@ -65,12 +65,51 @@ export default function Dashboard({ user }: { user: PanelUser }) {
   );
 
   const load = useCallback(async () => {
+    // Harte Zeitbegrenzung: ohne sie bleibt die Anzeige bei einer hängenden
+    // Verbindung für immer im Ladezustand, ohne dass irgendwo etwas auftaucht.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20_000);
+
     try {
-      const response = await fetch("/api/status", { cache: "no-store" });
-      setData((await response.json()) as StatusResponse);
-    } catch {
-      setData({ error: "Panel konnte den Status nicht abrufen" });
+      const response = await fetch("/api/status", {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+
+      const text = await response.text();
+
+      // Bei einem Serverfehler liefert Next eine HTML-Seite statt JSON. Die
+      // Rohantwort anzeigen ist hier hilfreicher als ein Parse-Fehler.
+      let parsed: StatusResponse;
+
+      try {
+        parsed = JSON.parse(text) as StatusResponse;
+      } catch {
+        setData({
+          error: `Unerwartete Antwort (HTTP ${response.status})`,
+          detail: text.slice(0, 300),
+        });
+        return;
+      }
+
+      if (!response.ok && !parsed.error) {
+        parsed.error = `Serverfehler (HTTP ${response.status})`;
+      }
+
+      setData(parsed);
+    } catch (error) {
+      const aborted = (error as Error).name === "AbortError";
+
+      setData({
+        error: aborted
+          ? "Zeitüberschreitung: der Server hat 20 Sekunden nicht geantwortet"
+          : "Das Panel konnte den Status nicht abrufen",
+        detail: aborted
+          ? "Meist hängt die Verbindung zur Datenbank. /api/health zeigt, welcher Schritt klemmt."
+          : (error as Error).message,
+      });
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   }, []);

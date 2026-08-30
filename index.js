@@ -11,10 +11,18 @@
  *   3. den Standalone-Server starten
  */
 
-const { cpSync, existsSync, mkdirSync, readdirSync, statSync } = require("node:fs");
+// Bewusst nur Node-Bordmittel: diese Datei muss auch dann laufen, wenn
+// node_modules noch fehlt - sonst kann sie die Abhaengigkeiten nicht nachziehen.
+const {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+} = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
-const { loadEnvConfig } = require("@next/env");
 
 function runOrExit(command, args) {
   const result = spawnSync(command, args, {
@@ -78,7 +86,61 @@ function needsBuild(serverPath) {
   return watched.some((entry) => newestMtime(entry) > buildTime);
 }
 
-loadEnvConfig(process.cwd());
+/**
+ * Abhängigkeiten exakt nach Lockfile installieren, wenn sich das Lockfile seit
+ * der letzten Installation geändert hat.
+ *
+ * Das Egg ruft vorher "npm install" auf, das je nach Node-Version und Zeitpunkt
+ * einen leicht anderen Abhängigkeitsbaum auflösen darf. "npm ci" erzwingt genau
+ * den Baum aus dem Lockfile - denselben, gegen den entwickelt und getestet wurde.
+ */
+function installIfLockChanged() {
+  const lockfile = path.join(process.cwd(), "package-lock.json");
+  const installed = path.join(process.cwd(), "node_modules", ".package-lock.json");
+
+  if (!existsSync(lockfile)) return;
+
+  if (!existsSync(installed) || newestMtime(lockfile) > newestMtime(installed)) {
+    console.log("[bootstrap] Abhängigkeiten weichen vom Lockfile ab, starte npm ci ...");
+    runOrExit("npm", ["ci"]);
+  }
+}
+
+/**
+ * Minimaler .env-Leser für die wenigen Werte, die schon vor dem Start gebraucht
+ * werden (PORT, APP_HOSTNAME). Die Anwendung selbst lädt ihre .env später über
+ * Next. Bereits gesetzte Umgebungsvariablen haben Vorrang.
+ */
+function loadDotEnv() {
+  const file = path.join(process.cwd(), ".env");
+  if (!existsSync(file)) return;
+
+  for (const rawLine of readFileSync(file, "utf8").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line === "" || line.startsWith("#")) continue;
+
+    const separator = line.indexOf("=");
+    if (separator <= 0) continue;
+
+    const key = line.slice(0, separator).trim();
+    let value = line.slice(separator + 1).trim();
+
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    if (process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+}
+
+loadDotEnv();
+
+installIfLockChanged();
 
 // Pelican/Pterodactyl geben den zugewiesenen Port als SERVER_PORT vor.
 if (process.env.SERVER_PORT) {

@@ -1,30 +1,16 @@
 import type { NextConfig } from "next";
 
-const isDev = process.env.NODE_ENV !== "production";
-
 const config: NextConfig = {
   output: "standalone",
 
+  // Die Content-Security-Policy wird NICHT hier gesetzt, sondern in
+  // src/middleware.ts. Sie braucht pro Anfrage eine frische Nonce, damit Nexts
+  // Inline-Skripte laufen dürfen - das geht mit statischen Headern nicht.
   async headers() {
     return [
       {
         source: "/:path*",
         headers: [
-          {
-            key: "Content-Security-Policy",
-            value: [
-              "default-src 'self'",
-              // Inline-Styles wegen der style-Attribute in den Komponenten.
-              "style-src 'self' 'unsafe-inline'",
-              // unsafe-eval nur in der Entwicklung, für das Hot Reloading.
-              `script-src 'self'${isDev ? " 'unsafe-eval'" : ""}`,
-              "img-src 'self' data: https://avatars.steamstatic.com",
-              "connect-src 'self'",
-              "frame-ancestors 'none'",
-              "base-uri 'self'",
-              "form-action 'self' https://steamcommunity.com",
-            ].join("; "),
-          },
           { key: "X-Frame-Options", value: "DENY" },
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },

@@ -1,5 +1,6 @@
 import type { PoolConnection } from "mysql2/promise";
 import { query, transaction } from "./db";
+import type { ServerConfig } from "./servers";
 
 /**
  * Zugriff auf den Jobbaum: Unit -> Subunit -> Job.
@@ -85,11 +86,13 @@ function fromStringArray(values: string[]): string {
   return JSON.stringify(values ?? []);
 }
 
-export async function loadTree(): Promise<UnitEntry[]> {
+// server: optional, um den Baum eines anderen Servers zu lesen (Uebertragen
+// zwischen Test und Live). Ohne Angabe der gerade gewaehlte Server.
+export async function loadTree(server?: ServerConfig): Promise<UnitEntry[]> {
   const [units, subunits, jobs] = await Promise.all([
-    query<Record<string, unknown>>("SELECT * FROM `pd_jobs_units`"),
-    query<Record<string, unknown>>("SELECT * FROM `pd_jobs_subunits`"),
-    query<Record<string, unknown>>("SELECT * FROM `pd_jobs_jobs`"),
+    query<Record<string, unknown>>("SELECT * FROM `pd_jobs_units`", [], server),
+    query<Record<string, unknown>>("SELECT * FROM `pd_jobs_subunits`", [], server),
+    query<Record<string, unknown>>("SELECT * FROM `pd_jobs_jobs`", [], server),
   ]);
 
   const tree: UnitEntry[] = units.map((row) => ({

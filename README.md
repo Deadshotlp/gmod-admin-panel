@@ -100,8 +100,9 @@ legt die Tabellen `pd_server_status` und `pd_online_players` an, schreibt alle 1
 Sekunden einen Heartbeat und stellt diese Konsolenbefehle bereit:
 
 ```
-pd_reload <jobs|fortbildung|fraktionen|armor|spawns|all>
+pd_reload <jobs|fortbildung|waffen|fraktionen|armor|spawns|all>
 pd_status
+pd_assets_write
 pd_admin_say <text>
 pd_admin_kick <steamid64> [grund]
 pd_defcon <0-5> [text]
@@ -113,10 +114,42 @@ verbundener Spieler kann sie nicht auslösen.
 Läuft mehr als ein Server auf derselben Datenbank, unterscheidet das ConVar
 `pd_server_key` sie. Der Wert muss zu `SERVER_KEY` in der `.env` passen.
 
-## Stand
+## Bereiche
 
-Fertig: Anmeldung, Rollen, Änderungsprotokoll, Live-Status, Nachladen.
+| Bereich | Inhalt |
+|---|---|
+| Übersicht | Serverstatus, Spielerliste, Nachladen anstoßen |
+| Jobs & Einheiten | Baum aus Unit, Untereinheit und Job; Export und Import |
+| Fortbildungen | Katalog und Inhaber |
+| Waffen & Gewichte | Kategorien, Gewichte, Tragelast, Rechner zum Durchspielen |
+| Spieler & Charaktere | Suche und Einsicht (nur lesend, siehe unten) |
+| Werkzeuge | Ausrüstungs-Prüfung, Sicherungen, Serverkonsole |
+| Änderungsprotokoll | Wer hat wann was geändert, mit Rücknahme |
+| Panel-Benutzer | Rollen vergeben |
 
-Noch nicht gebaut: Jobs & Einheiten, Fortbildungen, Waffen & Gewichte, Spieler &
-Charaktere, Strafakten, Benutzerverwaltung. Diese Punkte stehen ausgegraut in der
-Navigation.
+**Spieler & Charaktere ist bewusst nur lesend.** Die Einheitenzuordnung liegt
+gleichzeitig in `pd_characters` und in `data/factions/players.json`, und der
+Gamemode schreibt beim Verlassen eines Spielers dessen Zeilen komplett neu — eine
+Änderung von hier würde dabei überschrieben.
+
+## Sicherungen
+
+Vor Import, Rücknahme und Zurückspielen legt das Panel automatisch eine Sicherung
+des betroffenen Bereichs an. Die Dateien liegen im Ordner `backups/` neben der
+Anwendung und sind **nicht** im Repository. Bei einem Neuaufbau des Containers
+sind sie weg — wichtige Sicherungen also über die Oberfläche herunterladen.
+
+## Ausrüstungs-Prüfung
+
+Der Gamemode schreibt beim Start alle installierten Waffen und Playermodels nach
+`pd_server_assets`. Unter „Werkzeuge" zeigt das Panel damit an, welche Einträge in
+Jobs, Fortbildungen oder der Waffenkiste auf etwas verweisen, das es auf dem
+Server gar nicht gibt. Mit `pd_assets_write` in der Serverkonsole lässt sich der
+Bestand sofort erneuern.
+
+## Mehrere Server
+
+Sind weitere Server über `PANEL_SERVER_2_*` konfiguriert, erscheint in der
+Seitenleiste ein Umschalter. Jeder Server hat eine eigene Datenbank und eigene
+Pterodactyl-Anbindung. Der Jobbaum lässt sich exportieren und auf einem anderen
+Server importieren.

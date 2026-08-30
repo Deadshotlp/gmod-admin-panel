@@ -1,4 +1,4 @@
-import { PTERODACTYL_ENV_KEYS, missingEnv, pterodactylEnv } from "./env";
+import { getActiveServer, type ServerConfig } from "./servers";
 
 /**
  * Anbindung an die Pterodactyl-Client-API.
@@ -16,12 +16,8 @@ export interface CommandResult {
   message: string;
 }
 
-export function isPterodactylConfigured(): boolean {
-  return missingEnv(...PTERODACTYL_ENV_KEYS).length === 0;
-}
-
-export function pterodactylMissing(): string[] {
-  return missingEnv(...PTERODACTYL_ENV_KEYS);
+export async function isPterodactylConfigured(): Promise<boolean> {
+  return (await getActiveServer()).pterodactyl !== null;
 }
 
 /**
@@ -34,17 +30,18 @@ export function pterodactylMissing(): string[] {
  */
 export async function sendConsoleCommand(
   command: string,
+  server?: ServerConfig,
 ): Promise<CommandResult> {
-  const missing = pterodactylMissing();
+  const target = server ?? (await getActiveServer());
 
-  if (missing.length > 0) {
+  if (!target.pterodactyl) {
     return {
       ok: false,
-      message: `Pterodactyl ist nicht konfiguriert (fehlt: ${missing.join(", ")})`,
+      message: `Für "${target.label}" ist keine Pterodactyl-Anbindung hinterlegt`,
     };
   }
 
-  const { url, apiKey, serverId } = pterodactylEnv();
+  const { url, apiKey, serverId } = target.pterodactyl;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
@@ -96,6 +93,66 @@ export async function sendConsoleCommand(
   }
 }
 
+/**
+ * Zugangsdaten für den Konsolen-Websocket.
+ *
+ * Pterodactyl gibt dafür ein kurzlebiges Token aus, das der Browser direkt
+ * benutzt. Der eigentliche API-Schlüssel bleibt hier und geht nie mit.
+ */
+export async function getConsoleSocket(
+  server?: ServerConfig,
+): Promise<{ ok: boolean; socket?: string; token?: string; message?: string }> {
+  const target = server ?? (await getActiveServer());
+
+  if (!target.pterodactyl) {
+    return { ok: false, message: "Keine Pterodactyl-Anbindung hinterlegt" };
+  }
+
+  const { url, apiKey, serverId } = target.pterodactyl;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+
+  try {
+    const response = await fetch(
+      `${url}/api/client/servers/${serverId}/websocket`,
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          Accept: "application/json",
+        },
+        signal: controller.signal,
+        cache: "no-store",
+      },
+    );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        message: `Pterodactyl antwortete mit ${response.status}`,
+      };
+    }
+
+    const data = (await response.json()) as {
+      data?: { socket?: string; token?: string };
+    };
+
+    if (!data.data?.socket || !data.data.token) {
+      return { ok: false, message: "Unerwartete Antwort von Pterodactyl" };
+    }
+
+    return { ok: true, socket: data.data.socket, token: data.data.token };
+  } catch (error) {
+    if ((error as Error).name === "AbortError") {
+      return { ok: false, message: "Pterodactyl antwortet nicht" };
+    }
+
+    return { ok: false, message: "Pterodactyl ist nicht erreichbar" };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /** Bereiche, die pd_reload auf dem Server kennt. */
 export const RELOAD_AREAS = [
   "jobs",
@@ -115,6 +172,9 @@ export function isReloadArea(value: unknown): value is ReloadArea {
   );
 }
 
-export function reloadServer(area: ReloadArea): Promise<CommandResult> {
-  return sendConsoleCommand(`pd_reload ${area}`);
+export function reloadServer(
+  area: ReloadArea,
+  server?: ServerConfig,
+): Promise<CommandResult> {
+  return sendConsoleCommand(`pd_reload ${area}`, server);
 }

@@ -1,19 +1,21 @@
 import Link from "next/link";
 import type { PanelUser } from "@/lib/auth";
+import { getActiveServer, getServers } from "@/lib/servers";
+import ServerSwitcher from "./ServerSwitcher";
 
 /**
- * Rahmen mit Seitenleiste. Bereiche, die noch nicht gebaut sind, stehen bewusst
- * schon in der Navigation - ausgegraut, damit sichtbar ist was noch kommt.
+ * Rahmen mit Seitenleiste.
  */
 
-const NAV: Array<{ href: string; label: string; ready: boolean }> = [
-  { href: "/", label: "Übersicht", ready: true },
-  { href: "/jobs", label: "Jobs & Einheiten", ready: true },
-  { href: "/fortbildungen", label: "Fortbildungen", ready: true },
-  { href: "/waffen", label: "Waffen & Gewichte", ready: true },
-  { href: "/spieler", label: "Spieler & Charaktere", ready: true },
-  { href: "/audit", label: "Änderungsprotokoll", ready: true },
-  { href: "/benutzer", label: "Panel-Benutzer", ready: true },
+const NAV: Array<{ href: string; label: string }> = [
+  { href: "/", label: "Übersicht" },
+  { href: "/jobs", label: "Jobs & Einheiten" },
+  { href: "/fortbildungen", label: "Fortbildungen" },
+  { href: "/waffen", label: "Waffen & Gewichte" },
+  { href: "/spieler", label: "Spieler & Charaktere" },
+  { href: "/werkzeuge", label: "Werkzeuge" },
+  { href: "/audit", label: "Änderungsprotokoll" },
+  { href: "/benutzer", label: "Panel-Benutzer" },
 ];
 
 const ROLE_LABEL: Record<string, string> = {
@@ -22,7 +24,7 @@ const ROLE_LABEL: Record<string, string> = {
   admin: "Administrator",
 };
 
-export default function Shell({
+export default async function Shell({
   user,
   current,
   children,
@@ -31,6 +33,19 @@ export default function Shell({
   current: string;
   children: React.ReactNode;
 }) {
+  const servers = getServers().map((server) => ({
+    id: server.id,
+    label: server.label,
+  }));
+
+  let activeId = servers[0]?.id ?? "";
+
+  try {
+    activeId = (await getActiveServer()).id;
+  } catch {
+    // Ohne Konfiguration bleibt es beim ersten Eintrag
+  }
+
   return (
     <div className="layout">
       <nav className="sidebar">
@@ -39,21 +54,17 @@ export default function Shell({
           <span>Star Wars RP</span>
         </div>
 
-        {NAV.map((item) =>
-          item.ready ? (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`nav-item${current === item.href ? " active" : ""}`}
-            >
-              {item.label}
-            </Link>
-          ) : (
-            <span key={item.href} className="nav-item disabled">
-              {item.label}
-            </span>
-          ),
-        )}
+        <ServerSwitcher servers={servers} activeId={activeId} />
+
+        {NAV.map((item) => (
+          <Link
+            key={item.href}
+            href={item.href}
+            className={`nav-item${current === item.href ? " active" : ""}`}
+          >
+            {item.label}
+          </Link>
+        ))}
 
         <div className="sidebar-foot">
           <div>{user.displayName}</div>

@@ -90,6 +90,7 @@ export default function JobsManager({ user }: { user: PanelUser }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [affected, setAffected] = useState<number | null>(null);
 
   const canEdit = user.role === "editor" || user.role === "admin";
 
@@ -183,6 +184,28 @@ export default function JobsManager({ user }: { user: PanelUser }) {
     [],
   );
 
+  // Wie viele Charaktere haengen an diesem Knoten? Vor dem Speichern zu wissen,
+  // wen eine Aenderung trifft, verhindert die Massenaenderung, die keiner kommen sah.
+  const countAffected = useCallback(
+    async (payload: Record<string, string>) => {
+      setAffected(null);
+
+      try {
+        const response = await fetch("/api/jobs", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        const result = (await response.json()) as { affected?: number };
+        setAffected(result.affected ?? null);
+      } catch {
+        setAffected(null);
+      }
+    },
+    [],
+  );
+
   const toggle = (key: string) => {
     setExpanded((previous) => {
       const next = new Set(previous);
@@ -196,6 +219,7 @@ export default function JobsManager({ user }: { user: PanelUser }) {
 
   const selectUnit = (unit: UnitEntry) => {
     setSelection({ level: "unit", unitKey: unit.unitKey });
+    void countAffected({ unitKey: unit.unitKey });
     setDraft({
       name: unit.name,
       isDefault: unit.isDefault,
@@ -211,6 +235,7 @@ export default function JobsManager({ user }: { user: PanelUser }) {
       unitKey: unit.unitKey,
       subunitKey: subunit.subunitKey,
     });
+    void countAffected({ unitKey: unit.unitKey, subunitKey: subunit.subunitKey });
     setDraft({
       name: subunit.name,
       isDefault: subunit.isDefault,
@@ -231,6 +256,11 @@ export default function JobsManager({ user }: { user: PanelUser }) {
       subunitKey: subunit.subunitKey,
       jobKey: job.jobKey,
     });
+    void countAffected({
+      unitKey: unit.unitKey,
+      subunitKey: subunit.subunitKey,
+      jobKey: job.jobKey,
+    });
     setDraft({
       name: job.name,
       isDefault: job.isDefault,
@@ -247,12 +277,14 @@ export default function JobsManager({ user }: { user: PanelUser }) {
 
   const newUnit = () => {
     setSelection({ level: "unit", unitKey: "" });
+    setAffected(null);
     setDraft({ name: "Neue Einheit", isDefault: false, equip: "", color: "#3a86d4" });
     setMessage(null);
   };
 
   const newSubunit = (unit: UnitEntry) => {
     setSelection({ level: "subunit", unitKey: unit.unitKey, subunitKey: "" });
+    setAffected(null);
     setDraft({
       name: "Neue Untereinheit",
       isDefault: false,
@@ -416,6 +448,94 @@ export default function JobsManager({ user }: { user: PanelUser }) {
     <>
       {message && (
         <div className={`notice ${message.ok ? "ok" : "error"}`}>{message.text}</div>
+      )}
+
+      {canEdit && (
+        <div className="panel" style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <strong style={{ fontSize: 13 }}>ÜBERTRAGEN</strong>
+
+            <a href="/api/jobs/transfer" download="jobbaum.json">
+              <button style={{ padding: "5px 12px", fontSize: 13 }}>Exportieren</button>
+            </a>
+
+            {user.role === "admin" && (
+              <>
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  id="jobs-import"
+                  style={{ display: "none" }}
+                  onChange={async (event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = "";
+
+                    if (!file) return;
+
+                    if (
+                      !confirm(
+                        "Import ersetzt den kompletten Jobbaum.\n\n" +
+                          "Zuordnungen von Charakteren zu Einheiten, die es danach nicht mehr gibt, " +
+                          "gehen ins Leere. Der aktuelle Stand wird vorher automatisch gesichert.",
+                      )
+                    )
+                      return;
+
+                    setBusy(true);
+                    setMessage(null);
+
+                    try {
+                      const parsed = JSON.parse(await file.text()) as { units?: unknown };
+
+                      const response = await fetch("/api/jobs/transfer", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ units: parsed.units ?? parsed }),
+                      });
+
+                      const result = (await response.json()) as {
+                        units?: UnitEntry[];
+                        error?: string;
+                        reload?: { ok: boolean; message: string };
+                      };
+
+                      if (!response.ok || result.error) {
+                        setMessage({ ok: false, text: result.error ?? "Import fehlgeschlagen" });
+                        return;
+                      }
+
+                      setUnits(result.units ?? []);
+                      setSelection(null);
+                      setDraft(null);
+                      setMessage({
+                        ok: true,
+                        text: `Importiert. ${result.reload?.ok ? "Der Server lädt neu." : "Server nicht angestoßen."}`,
+                      });
+                    } catch (error) {
+                      setMessage({
+                        ok: false,
+                        text: `Datei nicht lesbar: ${(error as Error).message}`,
+                      });
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                />
+                <button
+                  style={{ padding: "5px 12px", fontSize: 13 }}
+                  disabled={busy}
+                  onClick={() => document.getElementById("jobs-import")?.click()}
+                >
+                  Importieren
+                </button>
+              </>
+            )}
+
+            <span className="subtitle" style={{ margin: 0, fontSize: 13 }}>
+              Sichert den Baum als Datei oder überträgt ihn zwischen Test und Live.
+            </span>
+          </div>
+        </div>
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "380px 1fr", gap: 18 }}>
@@ -590,6 +710,16 @@ export default function JobsManager({ user }: { user: PanelUser }) {
                     ? "Untereinheit"
                     : "Job"}
               </h2>
+
+              {!isNew && affected !== null && affected > 0 && (
+                <div className="notice" style={{ marginBottom: 16 }}>
+                  <strong>
+                    {affected} Charakter{affected === 1 ? "" : "e"} {affected === 1 ? "ist" : "sind"} hier zugeordnet.
+                  </strong>{" "}
+                  Namensänderungen wirken sich sofort auf alle aus, Löschen nimmt ihnen
+                  die Zuordnung.
+                </div>
+              )}
 
               <label className="card-label">Name</label>
               <input

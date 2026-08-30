@@ -34,6 +34,7 @@ export default function WaffenManager({ user }: { user: PanelUser }) {
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [filter, setFilter] = useState("");
   const [newClass, setNewClass] = useState("");
+  const [picked, setPicked] = useState<string[]>([]);
 
   const canEdit = user.role === "editor" || user.role === "admin";
 
@@ -476,6 +477,131 @@ export default function WaffenManager({ user }: { user: PanelUser }) {
             </button>
           </div>
         )}
+      </div>
+
+      <h2>Tragelast durchspielen</h2>
+      <div className="panel">
+        <p className="subtitle" style={{ marginTop: 0 }}>
+          Zusammenstellung anklicken und sehen, ob sie unter die Tragelast passt und
+          die Kategorielimits einhält. Ändert nichts an der Konfiguration.
+        </p>
+
+        {(() => {
+          const chosen = config.weapons.filter((weapon) => picked.includes(weapon.class));
+          const total = chosen.reduce((sum, weapon) => sum + weapon.weight, 0);
+          const overWeight = total > config.maxWeight;
+
+          const perCategory = new Map<string, number>();
+          for (const weapon of chosen) {
+            perCategory.set(weapon.category, (perCategory.get(weapon.category) ?? 0) + 1);
+          }
+
+          const overLimit = config.categories.filter(
+            (category) =>
+              category.maxItems > 0 && (perCategory.get(category.name) ?? 0) > category.maxItems,
+          );
+
+          return (
+            <>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  gap: 14,
+                  marginBottom: 12,
+                  fontSize: 18,
+                  fontWeight: 600,
+                  color: overWeight ? "var(--red)" : "var(--green)",
+                }}
+              >
+                <span>
+                  {total.toFixed(1)} / {config.maxWeight} Kg
+                </span>
+                <span style={{ fontSize: 13, fontWeight: 400, color: "var(--text-muted)" }}>
+                  {chosen.length} Gegenstände
+                </span>
+              </div>
+
+              {overWeight && (
+                <div className="notice error">
+                  Zu schwer — der Server würde die letzte Waffe ablehnen.
+                </div>
+              )}
+
+              {overLimit.length > 0 && (
+                <div className="notice error">
+                  Kategorielimit überschritten:{" "}
+                  {overLimit
+                    .map(
+                      (category) =>
+                        `${category.name} (${perCategory.get(category.name)}/${category.maxItems})`,
+                    )
+                    .join(", ")}
+                </div>
+              )}
+
+              {picked.length > 0 && (
+                <button
+                  style={{ marginBottom: 12, padding: "4px 10px", fontSize: 13 }}
+                  onClick={() => setPicked([])}
+                >
+                  Auswahl leeren
+                </button>
+              )}
+
+              <div style={{ maxHeight: 300, overflowY: "auto" }}>
+                {config.categories.map((category) => {
+                  const inCategory = config.weapons.filter(
+                    (weapon) => weapon.category === category.name,
+                  );
+
+                  if (inCategory.length === 0) return null;
+
+                  return (
+                    <div key={category.name} style={{ marginBottom: 10 }}>
+                      <div className="card-label">
+                        {category.name}
+                        {category.maxItems > 0 && ` (max. ${category.maxItems})`}
+                      </div>
+
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {inCategory.map((weapon) => {
+                          const active = picked.includes(weapon.class);
+
+                          return (
+                            <span
+                              key={weapon.class}
+                              onClick={() =>
+                                setPicked((previous) =>
+                                  active
+                                    ? previous.filter((entry) => entry !== weapon.class)
+                                    : [...previous, weapon.class],
+                                )
+                              }
+                              className="mono"
+                              style={{
+                                padding: "4px 9px",
+                                borderRadius: 3,
+                                fontSize: 12,
+                                cursor: "pointer",
+                                border: "1px solid",
+                                borderColor: active ? "var(--accent)" : "var(--border)",
+                                background: active ? "var(--bg-hover)" : "var(--bg-panel-light)",
+                                color: active ? "var(--text)" : "var(--text-dim)",
+                              }}
+                            >
+                              {weapon.class} · {weapon.weight}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          );
+        })()}
       </div>
 
       {canEdit && (

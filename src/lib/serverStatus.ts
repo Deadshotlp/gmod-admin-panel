@@ -1,5 +1,5 @@
 import { query, queryOne } from "./db";
-import { serverKey } from "./env";
+import { getActiveServer } from "./servers";
 
 /**
  * Live-Status des GMod-Servers.
@@ -59,7 +59,7 @@ export async function getServerStatus(): Promise<ServerStatus> {
     defcon: number;
     defcon_text: string;
     uptime: number;
-  }>("SELECT * FROM `pd_server_status` WHERE `server_key` = ?", [serverKey()]);
+  }>("SELECT * FROM `pd_server_status` WHERE `server_key` = ?", [(await getActiveServer()).serverKey]);
 
   if (!row) return EMPTY;
 
@@ -92,7 +92,7 @@ export async function getOnlinePlayers(): Promise<OnlinePlayer[]> {
     since: number;
   }>(
     "SELECT * FROM `pd_online_players` WHERE `server_key` = ? ORDER BY `name`",
-    [serverKey()],
+    [(await getActiveServer()).serverKey],
   );
 
   return rows.map((row) => ({

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { DB_ENV_KEYS, missingEnv, serverKey } from "@/lib/env";
+import { DB_ENV_KEYS, missingEnv } from "@/lib/env";
+import { getActiveServer } from "@/lib/servers";
 import { getPool } from "@/lib/db";
 import { getSessionSteamId } from "@/lib/session";
 
@@ -84,7 +85,8 @@ export async function GET() {
 
   // 3. Verbindung zur Datenbank
   const connection = await timed("db-verbindung", 12_000, async () => {
-    const conn = await getPool().getConnection();
+    const pool = await getPool();
+    const conn = await pool.getConnection();
     try {
       await conn.ping();
     } finally {
@@ -100,7 +102,8 @@ export async function GET() {
 
   // 4. Panel-Tabellen
   const panelTables = await timed("panel-tabellen", 12_000, async () => {
-    const [rows] = await getPool().query(
+    const pool = await getPool();
+    const [rows] = await pool.query(
       "SELECT COUNT(*) AS c FROM information_schema.tables " +
         "WHERE table_schema = DATABASE() AND table_name IN ('pd_panel_users', 'pd_panel_audit')",
     );
@@ -113,7 +116,8 @@ export async function GET() {
 
   // 5. Heartbeat-Tabellen des Gamemodes
   const gameTables = await timed("gamemode-tabellen", 12_000, async () => {
-    const [rows] = await getPool().query(
+    const pool = await getPool();
+    const [rows] = await pool.query(
       "SELECT COUNT(*) AS c FROM information_schema.tables " +
         "WHERE table_schema = DATABASE() AND table_name IN ('pd_server_status', 'pd_online_players')",
     );
@@ -129,7 +133,7 @@ export async function GET() {
 
   return NextResponse.json({
     ok: steps.every((step) => step.ok),
-    serverKey: serverKey(),
+    serverKey: (await getActiveServer()).serverKey,
     steps,
   });
 }

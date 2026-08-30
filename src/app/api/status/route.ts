@@ -6,7 +6,8 @@ import {
   getServerStatus,
   heartbeatTablesExist,
 } from "@/lib/serverStatus";
-import { isPterodactylConfigured, pterodactylMissing } from "@/lib/pterodactyl";
+import { isPterodactylConfigured } from "@/lib/pterodactyl";
+import { getActiveServer, getServers } from "@/lib/servers";
 
 export const dynamic = "force-dynamic";
 
@@ -49,10 +50,7 @@ export async function GET() {
         hint:
           "Die Tabellen pd_server_status und pd_online_players fehlen noch. " +
           "Sie entstehen beim ersten Start des Gamemodes mit dem Modul admin/module/remote.",
-        pterodactyl: {
-          configured: isPterodactylConfigured(),
-          missing: pterodactylMissing(),
-        },
+        pterodactyl: { configured: await isPterodactylConfigured() },
       });
     }
 
@@ -65,10 +63,9 @@ export async function GET() {
       configured: true,
       status,
       players,
-      pterodactyl: {
-        configured: isPterodactylConfigured(),
-        missing: pterodactylMissing(),
-      },
+      pterodactyl: { configured: await isPterodactylConfigured() },
+      server: { id: (await getActiveServer()).id, label: (await getActiveServer()).label },
+      servers: getServers().map((entry) => ({ id: entry.id, label: entry.label })),
     });
   } catch (error) {
     console.error("[status] Abfrage fehlgeschlagen:", error);

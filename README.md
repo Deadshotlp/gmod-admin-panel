@@ -104,6 +104,7 @@ pd_reload <jobs|fortbildung|waffen|fraktionen|armor|spawns|all>
 pd_status
 pd_assets_write
 pd_admin_say <text>
+pd_announce <Titel> | <Text> [| Sekunden]
 pd_admin_kick <steamid64> [grund]
 pd_defcon <0-5> [text]
 ```

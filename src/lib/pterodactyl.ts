@@ -16,6 +16,58 @@ export interface CommandResult {
   message: string;
 }
 
+/**
+ * Fehlerbeschreibung aus einer abgelehnten Antwort ziehen.
+ *
+ * Pterodactyl und Pelican antworten mit {"errors":[{"code":..., "detail":...}]}.
+ * Genau dieses Feld unterscheidet die Ursachen voneinander - ohne es sieht jeder
+ * 403 gleich aus. Kommt kein JSON zurück, steht meist ein Proxy davor.
+ */
+async function describeError(response: Response): Promise<string> {
+  let code = "";
+  let detail = "";
+
+  try {
+    const body = (await response.json()) as {
+      errors?: Array<{ code?: string; detail?: string }>;
+    };
+
+    const first = body.errors?.[0];
+    code = first?.code ?? "";
+    detail = first?.detail ?? "";
+  } catch {
+    // Keine JSON-Antwort: dann kommt der Fehler nicht von Pterodactyl selbst,
+    // sondern von etwas davor (Cloudflare, Reverse Proxy, WAF).
+  }
+
+  const parts = [`HTTP ${response.status}`];
+  if (code !== "") parts.push(code);
+  if (detail !== "") parts.push(detail);
+
+  return parts.join(" - ");
+}
+
+/**
+ * Die drei Ursachen, die hinter einem 401/403 der Client-API stecken. Der
+ * Schlüssel selbst wird nie ausgegeben, nur seine Bauart.
+ */
+function rejectionHint(apiKey: string): string {
+  if (apiKey.startsWith("ptla_")) {
+    return (
+      "Der hinterlegte Schlüssel ist ein Application-Key (ptla_). Die Client-API " +
+      "nimmt nur Client-Keys an - zu finden unter Account-Einstellungen, nicht im " +
+      "Admin-Bereich."
+    );
+  }
+
+  return (
+    "Mögliche Ursachen: (1) es ist ein Application-Key statt eines Client-Keys, " +
+    "(2) am Schlüssel ist eine IP-Beschränkung gesetzt, die die IP des Panels " +
+    "nicht enthält, (3) der Account ist nicht Besitzer des Servers und hat kein " +
+    "Recht auf die Konsole."
+  );
+}
+
 export async function isPterodactylConfigured(): Promise<boolean> {
   return (await getActiveServer()).pterodactyl !== null;
 }
@@ -67,7 +119,12 @@ export async function sendConsoleCommand(
     }
 
     if (response.status === 401 || response.status === 403) {
-      return { ok: false, message: "Pterodactyl lehnt den API-Schlüssel ab" };
+      return {
+        ok: false,
+        message:
+          `Pterodactyl lehnt den Zugriff ab (${await describeError(response)}). ` +
+          rejectionHint(apiKey),
+      };
     }
 
     if (response.status === 404) {
@@ -80,7 +137,7 @@ export async function sendConsoleCommand(
 
     return {
       ok: false,
-      message: `Pterodactyl antwortete mit ${response.status}`,
+      message: `Pterodactyl antwortete mit ${await describeError(response)}`,
     };
   } catch (error) {
     if ((error as Error).name === "AbortError") {
@@ -127,10 +184,16 @@ export async function getConsoleSocket(
     );
 
     if (!response.ok) {
-      return {
-        ok: false,
-        message: `Pterodactyl antwortete mit ${response.status}`,
-      };
+      const described = await describeError(response);
+
+      if (response.status === 401 || response.status === 403) {
+        return {
+          ok: false,
+          message: `Pterodactyl lehnt den Zugriff ab (${described}). ${rejectionHint(apiKey)}`,
+        };
+      }
+
+      return { ok: false, message: `Pterodactyl antwortete mit ${described}` };
     }
 
     const data = (await response.json()) as {
@@ -148,6 +211,62 @@ export async function getConsoleSocket(
     }
 
     return { ok: false, message: "Pterodactyl ist nicht erreichbar" };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Kurzer Selbsttest der Anbindung, ohne etwas am Server auszulösen.
+ *
+ * Fragt nur die Serverdaten ab. Das ist derselbe Rechteweg wie beim Absetzen
+ * eines Befehls, hat aber keine Wirkung - taugt also für die Diagnose.
+ */
+export async function probePterodactyl(
+  server?: ServerConfig,
+): Promise<{ ok: boolean; detail: string }> {
+  const target = server ?? (await getActiveServer());
+
+  if (!target.pterodactyl) {
+    return { ok: false, detail: "nicht konfiguriert" };
+  }
+
+  const { url, apiKey, serverId } = target.pterodactyl;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+
+  try {
+    const response = await fetch(`${url}/api/client/servers/${serverId}`, {
+      headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+      signal: controller.signal,
+      cache: "no-store",
+    });
+
+    if (response.ok) {
+      return { ok: true, detail: "Schlüssel und Server-ID gültig" };
+    }
+
+    const described = await describeError(response);
+
+    if (response.status === 401 || response.status === 403) {
+      return { ok: false, detail: `${described}. ${rejectionHint(apiKey)}` };
+    }
+
+    if (response.status === 404) {
+      return {
+        ok: false,
+        detail: `${described}. PTERODACTYL_SERVER_ID passt zu keinem Server dieses Accounts.`,
+      };
+    }
+
+    return { ok: false, detail: described };
+  } catch (error) {
+    if ((error as Error).name === "AbortError") {
+      return { ok: false, detail: "keine Antwort innerhalb von 10 Sekunden" };
+    }
+
+    return { ok: false, detail: "nicht erreichbar - stimmt PTERODACTYL_URL?" };
   } finally {
     clearTimeout(timeout);
   }

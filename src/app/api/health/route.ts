@@ -3,6 +3,7 @@ import { DB_ENV_KEYS, missingEnv } from "@/lib/env";
 import { getActiveServer } from "@/lib/servers";
 import { getPool } from "@/lib/db";
 import { getSessionSteamId } from "@/lib/session";
+import { probePterodactyl } from "@/lib/pterodactyl";
 
 export const dynamic = "force-dynamic";
 
@@ -131,9 +132,32 @@ export async function GET() {
         : "fehlen - das Gamemode-Modul admin/module/remote lief noch nie",
   });
 
+  // 6. Pterodactyl-Anbindung. Nur lesend, loest nichts auf dem Spielserver aus.
+  const server = await getActiveServer();
+
+  if (server.pterodactyl) {
+    const probe = await timed("pterodactyl", 12_000, async () =>
+      probePterodactyl(server),
+    );
+
+    steps.push({
+      name: "pterodactyl",
+      ok: probe.step.ok && (probe.value?.ok ?? false),
+      ms: probe.step.ms,
+      detail: probe.value?.detail ?? probe.step.detail,
+    });
+  } else {
+    steps.push({
+      name: "pterodactyl",
+      ok: true,
+      ms: 0,
+      detail: "nicht konfiguriert - Nachladen und Konsole bleiben aus",
+    });
+  }
+
   return NextResponse.json({
     ok: steps.every((step) => step.ok),
-    serverKey: (await getActiveServer()).serverKey,
+    serverKey: server.serverKey,
     steps,
   });
 }

@@ -35,6 +35,25 @@ export const WEAPON_FIELDS: FieldSpec[] = [
   { key: "sight_time", label: "Zielzeit", group: "Handhabung", unit: "s" },
   { key: "speed_mult", label: "Tempo mit Waffe", group: "Handhabung" },
   { key: "sighted_speed", label: "Tempo im Visier", group: "Handhabung" },
+  { key: "jump_dispersion", label: "Streuung im Sprung", group: "Handhabung" },
+  { key: "sights_dispersion", label: "Streuung im Visier", group: "Handhabung" },
+  { key: "recoil_punch", label: "Kameraschlag", group: "Handhabung" },
+  { key: "visual_recoil", label: "Sichtbarer Rückstoß", group: "Handhabung" },
+  { key: "sway", label: "Schwanken", group: "Handhabung" },
+
+  { key: "clip_size", label: "Magazin", group: "Munition" },
+  { key: "clip_extended", label: "Magazin groß", group: "Munition" },
+  { key: "clip_reduced", label: "Magazin klein", group: "Munition" },
+  { key: "ammo_per_shot", label: "Verbrauch", group: "Munition", hint: "je Schuss" },
+  { key: "damage_rand", label: "Schadensstreuung", group: "Munition" },
+
+  { key: "heat_capacity", label: "Hitze bis Sperre", group: "Hitze" },
+  { key: "heat_gain", label: "Hitze je Schuss", group: "Hitze" },
+  { key: "heat_dissipation", label: "Abkühlung", group: "Hitze" },
+  { key: "heat_delay", label: "Verzögerung", group: "Hitze", unit: "s" },
+
+  { key: "melee_damage", label: "Nahkampfschaden", group: "Nahkampf" },
+  { key: "melee_range", label: "Nahkampfreichweite", group: "Nahkampf" },
 ];
 
 export const ZONE_FIELDS: FieldSpec[] = [
@@ -59,6 +78,7 @@ export const ATTACHMENT_FIELDS: FieldSpec[] = [
   { key: "mult_move_dispersion", label: "Streuung Bewegung", group: "Faktor" },
   { key: "mult_sight_time", label: "Zielzeit", group: "Faktor" },
   { key: "mult_speed", label: "Tempo", group: "Faktor" },
+  { key: "mult_visual_recoil", label: "Sichtbarer Rückstoß", group: "Faktor" },
   { key: "clip_size", label: "Magazin", group: "Fest", hint: "0 = unverändert" },
 ];
 

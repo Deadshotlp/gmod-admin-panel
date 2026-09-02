@@ -47,11 +47,17 @@ interface Zone {
   values: Values;
 }
 
+interface Block {
+  class: string;
+  atts: string[];
+}
+
 interface Payload {
   configured: boolean;
   weapons?: Weapon[];
   attachments?: Attachment[];
   zones?: Zone[];
+  blocks?: Block[];
   hint?: string;
 }
 
@@ -61,6 +67,7 @@ const TABS = [
   { id: "weapons", label: "Waffen" },
   { id: "zones", label: "Trefferzonen" },
   { id: "attachments", label: "Aufsätze" },
+  { id: "blocks", label: "Freigaben" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -100,6 +107,7 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
   const [weaponSheet, setWeaponSheet] = useState<Sheet>({});
   const [attSheet, setAttSheet] = useState<Sheet>({});
   const [zoneSheet, setZoneSheet] = useState<Sheet>({});
+  const [blocks, setBlocks] = useState<Record<string, string[]>>({});
   const [search, setSearch] = useState("");
   const [onlyChanged, setOnlyChanged] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
@@ -130,6 +138,10 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
 
     setZoneSheet(
       sheetFrom((payload.zones ?? []).map((zone) => ({ id: zone.class, values: zone.values }))),
+    );
+
+    setBlocks(
+      Object.fromEntries((payload.blocks ?? []).map((block) => [block.class, block.atts])),
     );
   }
 
@@ -187,6 +199,9 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
         class: className,
         ...collect(zoneSheet, ZONE_KEYS, className),
       })),
+      blocks: Object.entries(blocks)
+        .filter(([, atts]) => atts.length > 0)
+        .map(([className, atts]) => ({ class: className, atts })),
     };
 
     const broken = [...body.weapons, ...body.attachments, ...body.zones].find((row) =>
@@ -356,6 +371,195 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
           }
         />
       )}
+      {tab === "blocks" && (
+        <BlockEditor
+          weapons={weapons}
+          attachments={attachments}
+          blocks={blocks}
+          setBlocks={setBlocks}
+          canEdit={canEdit}
+          search={search}
+        />
+      )}
+    </div>
+  );
+}
+/**
+ * Freigaben.
+ *
+ * Zwei Ebenen: oben die Aufsätze, die es auf dem Server gar nicht geben soll —
+ * dafür setzt der Server ArcCWs eigenes Feld `Blacklisted`. Darunter Sperren für
+ * einzelne Waffen; die greifen über die Prüfung, die ArcCW selbst beim Anbauen
+ * durchläuft.
+ *
+ * Angeboten werden je Waffe nur die Aufsätze, die überhaupt an sie passen: die
+ * Waffe bringt eine Liste von Steckplatz-Kategorien mit, der Aufsatz gehört zu
+ * genau einer davon.
+ */
+function BlockEditor({
+  weapons,
+  attachments,
+  blocks,
+  setBlocks,
+  canEdit,
+  search,
+}: {
+  weapons: Weapon[];
+  attachments: Attachment[];
+  blocks: Record<string, string[]>;
+  setBlocks: (updater: (previous: Record<string, string[]>) => Record<string, string[]>) => void;
+  canEdit: boolean;
+  search: string;
+}) {
+  const [picked, setPicked] = useState("");
+
+  const everywhere = blocks["*"] ?? [];
+
+  function toggle(className: string, attId: string) {
+    setBlocks((previous) => {
+      const current = previous[className] ?? [];
+      const next = current.includes(attId)
+        ? current.filter((entry) => entry !== attId)
+        : [...current, attId];
+
+      return { ...previous, [className]: next };
+    });
+  }
+
+  const weapon = weapons.find((entry) => entry.class === picked) ?? null;
+
+  const fitting = useMemo(() => {
+    if (!weapon) return [];
+
+    const slots = new Set(weapon.slots);
+
+    return attachments.filter((att) => att.slot !== "" && slots.has(att.slot));
+  }, [weapon, attachments]);
+
+  const filtered = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+
+    return attachments.filter(
+      (att) =>
+        needle === "" ||
+        att.name.toLowerCase().includes(needle) ||
+        att.id.toLowerCase().includes(needle) ||
+        att.slot.toLowerCase().includes(needle),
+    );
+  }, [attachments, search]);
+
+  if (attachments.length === 0) {
+    return (
+      <div className="card">
+        <p>
+          Der Server hat keine Aufsätze gemeldet. <code>pd_arccw_probe</code> in der
+          Serverkonsole zeigt, ob ArcCW welche führt.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <h2 style={{ margin: 0, fontSize: 16 }}>Überall gesperrt</h2>
+        <p style={{ fontSize: 13, color: "var(--text-muted)", margin: 0 }}>
+          Diese Aufsätze soll es auf dem Server gar nicht geben — an keiner Waffe.
+          {everywhere.length > 0 && ` Aktuell ${everywhere.length}.`}
+        </p>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+            gap: 4,
+            maxHeight: 320,
+            overflowY: "auto",
+          }}
+        >
+          {filtered.map((att) => (
+            <label
+              key={att.id}
+              style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 13 }}
+            >
+              <input
+                type="checkbox"
+                checked={everywhere.includes(att.id)}
+                onChange={() => toggle("*", att.id)}
+                disabled={!canEdit}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                {att.name}
+                <span style={{ display: "block", fontFamily: "Consolas, monospace", fontSize: 11, color: "var(--text-muted)" }}>
+                  {att.slot || att.id}
+                </span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <h2 style={{ margin: 0, fontSize: 16 }}>Nur für eine bestimmte Waffe sperren</h2>
+
+        <select
+          value={picked}
+          onChange={(event) => setPicked(event.target.value)}
+          style={{ ...inputStyle, maxWidth: 420 }}
+        >
+          <option value="">Waffe wählen …</option>
+          {weapons.map((entry) => (
+            <option key={entry.class} value={entry.class}>
+              {entry.name} ({entry.class})
+              {(blocks[entry.class]?.length ?? 0) > 0
+                ? ` — ${blocks[entry.class]?.length} gesperrt`
+                : ""}
+            </option>
+          ))}
+        </select>
+
+        {weapon && (
+          <>
+            <p style={{ fontSize: 13, color: "var(--text-muted)", margin: 0 }}>
+              {fitting.length > 0
+                ? `${fitting.length} Aufsätze passen auf die Steckplätze dieser Waffe.`
+                : "Zu den Steckplätzen dieser Waffe passt kein erfasster Aufsatz."}
+            </p>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+                gap: 4,
+                maxHeight: 320,
+                overflowY: "auto",
+              }}
+            >
+              {fitting.map((att) => (
+                <label
+                  key={att.id}
+                  style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 13 }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={(blocks[weapon.class] ?? []).includes(att.id)}
+                    onChange={() => toggle(weapon.class, att.id)}
+                    disabled={!canEdit || everywhere.includes(att.id)}
+                    style={{ marginTop: 3 }}
+                  />
+                  <span style={{ opacity: everywhere.includes(att.id) ? 0.5 : 1 }}>
+                    {att.name}
+                    <span style={{ display: "block", fontFamily: "Consolas, monospace", fontSize: 11, color: "var(--text-muted)" }}>
+                      {everywhere.includes(att.id) ? "bereits überall gesperrt" : att.slot}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

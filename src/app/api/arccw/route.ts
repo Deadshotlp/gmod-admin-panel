@@ -50,25 +50,32 @@ interface ZoneRow {
   values: Values;
 }
 
+/** Gesperrte Aufsätze. Der Schlüssel "*" sperrt überall. */
+interface BlockRow {
+  class: string;
+  atts: string[];
+}
+
 async function tablesExist(): Promise<boolean> {
   const rows = await query<{ c: number }>(
     "SELECT COUNT(*) AS c FROM information_schema.tables " +
       "WHERE table_schema = DATABASE() AND table_name IN " +
       "('pd_arccw_stats', 'pd_arccw_overrides', 'pd_arccw_atts', " +
-      "'pd_arccw_att_over', 'pd_arccw_zones')",
+      "'pd_arccw_att_over', 'pd_arccw_zones', 'pd_arccw_blocks')",
   );
 
-  return Number(rows[0]?.c ?? 0) >= 5;
+  return Number(rows[0]?.c ?? 0) >= 6;
 }
 
 async function load(): Promise<{
   weapons: WeaponRow[];
   attachments: AttachmentRow[];
   zones: ZoneRow[];
+  blocks: BlockRow[];
 }> {
   const key = (await getActiveServer()).serverKey;
 
-  const [stats, overrides, atts, attOver, zones] = await Promise.all([
+  const [stats, overrides, atts, attOver, zones, blocks] = await Promise.all([
     query<Record<string, unknown>>(
       "SELECT * FROM `pd_arccw_stats` WHERE `server_key` = ? ORDER BY `category`, `name`",
       [key],
@@ -87,6 +94,10 @@ async function load(): Promise<{
     ),
     query<Record<string, unknown>>(
       "SELECT * FROM `pd_arccw_zones` WHERE `server_key` = ?",
+      [key],
+    ),
+    query<Record<string, unknown>>(
+      "SELECT * FROM `pd_arccw_blocks` WHERE `server_key` = ?",
       [key],
     ),
   ]);
@@ -124,6 +135,11 @@ async function load(): Promise<{
       class: String(row.class),
       values: readValues(row.values_json, ZONE_KEYS),
     })),
+
+    blocks: blocks.map((row) => ({
+      class: String(row.class),
+      atts: readList(row.atts_json),
+    })),
   };
 }
 
@@ -154,6 +170,14 @@ const schema = z.object({
       z.object({
         class: z.string().min(1).max(128),
         values: numbers,
+      }),
+    )
+    .max(3000),
+  blocks: z
+    .array(
+      z.object({
+        class: z.string().min(1).max(128),
+        atts: z.array(z.string().min(1).max(128)).max(300),
       }),
     )
     .max(3000),
@@ -267,6 +291,9 @@ export async function POST(request: Request) {
       ...parsed.data.zones
         .filter((entry) => entry.class !== "*" && !knownClasses.has(entry.class))
         .map((e) => e.class),
+      ...parsed.data.blocks
+        .filter((entry) => entry.class !== "*" && !knownClasses.has(entry.class))
+        .map((e) => e.class),
     ];
 
     if (strays.length > 0) {
@@ -283,7 +310,12 @@ export async function POST(request: Request) {
     const now = Math.floor(Date.now() / 1000);
 
     await transaction(async (conn) => {
-      for (const table of ["pd_arccw_overrides", "pd_arccw_att_over", "pd_arccw_zones"]) {
+      for (const table of [
+        "pd_arccw_overrides",
+        "pd_arccw_att_over",
+        "pd_arccw_zones",
+        "pd_arccw_blocks",
+      ]) {
         await conn.execute(`DELETE FROM \`${table}\` WHERE \`server_key\` = ?`, [key]);
       }
 
@@ -319,6 +351,16 @@ export async function POST(request: Request) {
           [key, entry.class, JSON.stringify(values), now],
         );
       }
+
+      for (const entry of parsed.data.blocks) {
+        if (entry.atts.length === 0) continue;
+
+        await conn.execute(
+          "INSERT INTO `pd_arccw_blocks` (`server_key`, `class`, `atts_json`, `updated_at`) " +
+            "VALUES (?, ?, ?, ?)",
+          [key, entry.class, JSON.stringify(entry.atts), now],
+        );
+      }
     });
 
     const after = await load();
@@ -332,11 +374,13 @@ export async function POST(request: Request) {
         weapons: before.weapons.filter((w) => Object.keys(w.override).length > 0),
         attachments: before.attachments.filter((a) => Object.keys(a.override).length > 0),
         zones: before.zones,
+        blocks: before.blocks,
       },
       after: {
         weapons: after.weapons.filter((w) => Object.keys(w.override).length > 0),
         attachments: after.attachments.filter((a) => Object.keys(a.override).length > 0),
         zones: after.zones,
+        blocks: after.blocks,
       },
     });
 

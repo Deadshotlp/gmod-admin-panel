@@ -2,52 +2,104 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { PanelUser } from "@/lib/auth";
+import {
+  ATTACHMENT_FIELDS,
+  ATTACHMENT_KEYS,
+  WEAPON_FIELDS,
+  WEAPON_KEYS,
+  ZONE_FIELDS,
+  ZONE_KEYS,
+  type FieldSpec,
+  type Values,
+} from "@/lib/arccw";
 import { fetchWithTimeout, inputStyle, Notice, readJson } from "./ui";
 
 /**
- * Schadenswerte der ArcCW-Waffen.
+ * Werte der ArcCW-Waffen.
  *
- * Jede Zeile zeigt den Ausgangswert aus dem Addon als Platzhalter. Ein leeres
- * Feld heißt: so lassen. Erst ein eingetragener Wert wird zur Abweichung, und
- * nur die landet in der Datenbank. Damit bleibt jederzeit sichtbar, was
- * absichtlich geändert wurde - und ein Leeren stellt den Originalwert wieder
- * her, ohne dass man ihn nachschlagen muss.
+ * Überall gilt dasselbe: der graue Wert im Feld ist der Ausgangswert aus dem
+ * Addon, ein leeres Feld heißt "so lassen". Nur ausgefüllte Felder werden zur
+ * Abweichung und landen in der Datenbank. Damit bleibt sichtbar, was absichtlich
+ * geändert wurde, und ein Leeren stellt das Original wieder her.
  */
-
-const FIELDS = [
-  { key: "damage", label: "Schaden nah", hint: "bis zur vollen Reichweite" },
-  { key: "damage_min", label: "Schaden fern", hint: "ab der maximalen Reichweite" },
-  { key: "range_min", label: "Voller Schaden bis", hint: "Meter" },
-  { key: "range", label: "Mindestschaden ab", hint: "Meter" },
-  { key: "penetration", label: "Durchschlag", hint: "" },
-  { key: "num", label: "Projektile", hint: "je Schuss" },
-] as const;
-
-type FieldKey = (typeof FIELDS)[number]["key"];
 
 interface Weapon {
   class: string;
   name: string;
   category: string;
-  defaults: Record<FieldKey, number>;
-  override: Partial<Record<FieldKey, number>>;
+  slots: string[];
+  defaults: Values;
+  override: Values;
   note: string;
-  updatedAt: number;
+}
+
+interface Attachment {
+  id: string;
+  name: string;
+  slot: string;
+  defaults: Values;
+  override: Values;
+  note: string;
+}
+
+interface Zone {
+  class: string;
+  values: Values;
 }
 
 interface Payload {
   configured: boolean;
   weapons?: Weapon[];
+  attachments?: Attachment[];
+  zones?: Zone[];
   hint?: string;
 }
 
-type Draft = Record<string, Partial<Record<FieldKey | "note", string>>>;
+type Sheet = Record<string, Record<string, string>>;
+
+const TABS = [
+  { id: "weapons", label: "Waffen" },
+  { id: "zones", label: "Trefferzonen" },
+  { id: "attachments", label: "Aufsätze" },
+] as const;
+
+type TabId = (typeof TABS)[number]["id"];
+
+/** Text ins Zahlenfeld: leer bleibt leer, Komma zählt wie Punkt. */
+function toNumber(text: string): number | null {
+  const trimmed = text.trim();
+  if (trimmed === "") return null;
+
+  const value = Number(trimmed.replace(",", "."));
+
+  return Number.isFinite(value) ? value : Number.NaN;
+}
+
+function sheetFrom(rows: Array<{ id: string; values: Values; note?: string }>): Sheet {
+  const sheet: Sheet = {};
+
+  for (const row of rows) {
+    const entry: Record<string, string> = {};
+
+    for (const [key, value] of Object.entries(row.values)) {
+      entry[key] = String(value);
+    }
+
+    if (row.note !== undefined) entry.__note = row.note;
+    sheet[row.id] = entry;
+  }
+
+  return sheet;
+}
 
 export default function ArccwManager({ user }: { user: PanelUser }) {
   const canEdit = user.role !== "viewer";
 
   const [state, setState] = useState<Payload | null>(null);
-  const [draft, setDraft] = useState<Draft>({});
+  const [tab, setTab] = useState<TabId>("weapons");
+  const [weaponSheet, setWeaponSheet] = useState<Sheet>({});
+  const [attSheet, setAttSheet] = useState<Sheet>({});
+  const [zoneSheet, setZoneSheet] = useState<Sheet>({});
   const [search, setSearch] = useState("");
   const [onlyChanged, setOnlyChanged] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
@@ -56,21 +108,29 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
   function adopt(payload: Payload) {
     setState(payload);
 
-    const next: Draft = {};
+    setWeaponSheet(
+      sheetFrom(
+        (payload.weapons ?? []).map((weapon) => ({
+          id: weapon.class,
+          values: weapon.override,
+          note: weapon.note,
+        })),
+      ),
+    );
 
-    for (const weapon of payload.weapons ?? []) {
-      const entry: Partial<Record<FieldKey | "note", string>> = {};
+    setAttSheet(
+      sheetFrom(
+        (payload.attachments ?? []).map((att) => ({
+          id: att.id,
+          values: att.override,
+          note: att.note,
+        })),
+      ),
+    );
 
-      for (const field of FIELDS) {
-        const value = weapon.override[field.key];
-        entry[field.key] = value === undefined ? "" : String(value);
-      }
-
-      entry.note = weapon.note;
-      next[weapon.class] = entry;
-    }
-
-    setDraft(next);
+    setZoneSheet(
+      sheetFrom((payload.zones ?? []).map((zone) => ({ id: zone.class, values: zone.values }))),
+    );
   }
 
   async function load() {
@@ -99,82 +159,46 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
   }, []);
 
   const weapons = state?.weapons ?? [];
-
-  const changedCount = useMemo(
-    () =>
-      weapons.filter((weapon) =>
-        FIELDS.some((field) => (draft[weapon.class]?.[field.key] ?? "") !== ""),
-      ).length,
-    [weapons, draft],
-  );
-
-  const visible = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-
-    return weapons.filter((weapon) => {
-      if (onlyChanged) {
-        const hasValue = FIELDS.some(
-          (field) => (draft[weapon.class]?.[field.key] ?? "") !== "",
-        );
-        if (!hasValue) return false;
-      }
-
-      if (needle === "") return true;
-
-      return (
-        weapon.class.toLowerCase().includes(needle) ||
-        weapon.name.toLowerCase().includes(needle) ||
-        weapon.category.toLowerCase().includes(needle)
-      );
-    });
-  }, [weapons, search, onlyChanged, draft]);
-
-  function set(weaponClass: string, field: FieldKey | "note", value: string) {
-    setDraft((previous) => ({
-      ...previous,
-      [weaponClass]: { ...previous[weaponClass], [field]: value },
-    }));
-  }
-
-  function reset(weaponClass: string) {
-    setDraft((previous) => {
-      const entry: Partial<Record<FieldKey | "note", string>> = { note: "" };
-      for (const field of FIELDS) entry[field.key] = "";
-
-      return { ...previous, [weaponClass]: entry };
-    });
-  }
+  const attachments = state?.attachments ?? [];
 
   async function save() {
     setBusy(true);
     setMessage(null);
 
-    const changes = weapons.map((weapon) => {
-      const entry = draft[weapon.class] ?? {};
-      const row: Record<string, unknown> = {
+    function collect(sheet: Sheet, keys: string[], id: string) {
+      const entry = sheet[id] ?? {};
+      const values: Record<string, number | null> = {};
+
+      for (const key of keys) values[key] = toNumber(entry[key] ?? "");
+
+      return { values, note: entry.__note ?? "" };
+    }
+
+    const body = {
+      weapons: weapons.map((weapon) => ({
         class: weapon.class,
-        note: entry.note ?? "",
-      };
+        ...collect(weaponSheet, WEAPON_KEYS, weapon.class),
+      })),
+      attachments: attachments.map((att) => ({
+        id: att.id,
+        ...collect(attSheet, ATTACHMENT_KEYS, att.id),
+      })),
+      zones: Object.keys(zoneSheet).map((className) => ({
+        class: className,
+        ...collect(zoneSheet, ZONE_KEYS, className),
+      })),
+    };
 
-      for (const field of FIELDS) {
-        const raw = (entry[field.key] ?? "").trim();
-        // Leer heißt: nicht gesetzt. Eine 0 ist ein gültiger Wert und bleibt es.
-        row[field.key] = raw === "" ? null : Number(raw.replace(",", "."));
-      }
-
-      return row;
-    });
-
-    const invalid = changes.find((row) =>
-      FIELDS.some((field) => {
-        const value = row[field.key];
-        return value !== null && !Number.isFinite(value as number);
-      }),
+    const broken = [...body.weapons, ...body.attachments, ...body.zones].find((row) =>
+      Object.values(row.values).some((value) => value !== null && Number.isNaN(value)),
     );
 
-    if (invalid) {
+    if (broken) {
       setBusy(false);
-      setMessage({ ok: false, text: `Keine gültige Zahl bei ${invalid.class}` });
+      setMessage({
+        ok: false,
+        text: `Keine gültige Zahl bei ${"class" in broken ? broken.class : broken.id}`,
+      });
       return;
     }
 
@@ -182,20 +206,19 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
       const response = await fetchWithTimeout("/api/arccw", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ changes }),
+        body: JSON.stringify(body),
       });
 
-      const { data, error } = await readJson<{
-        weapons: Weapon[];
-        reload: { ok: boolean; message: string };
-      }>(response);
+      const { data, error } = await readJson<
+        Payload & { reload: { ok: boolean; message: string } }
+      >(response);
 
       if (error || !data) {
         setMessage({ ok: false, text: error ?? "Speichern fehlgeschlagen" });
         return;
       }
 
-      adopt({ configured: true, weapons: data.weapons });
+      adopt({ ...data, configured: true });
 
       setMessage({
         ok: data.reload.ok,
@@ -227,33 +250,36 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
       {message && <Notice ok={message.ok}>{message.text}</Notice>}
 
       <div className="card">
-        <div
-          style={{
-            display: "flex",
-            gap: 12,
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
-        >
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          {TABS.map((entry) => (
+            <button
+              key={entry.id}
+              className={tab === entry.id ? "primary" : undefined}
+              onClick={() => setTab(entry.id)}
+            >
+              {entry.label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Suchen nach Name, Klasse oder Kategorie"
-            style={{ ...inputStyle, flex: "1 1 260px" }}
+            placeholder="Suchen"
+            style={{ ...inputStyle, flex: "1 1 240px" }}
           />
 
-          <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 14 }}>
-            <input
-              type="checkbox"
-              checked={onlyChanged}
-              onChange={(event) => setOnlyChanged(event.target.checked)}
-            />
-            Nur angepasste
-          </label>
-
-          <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
-            {changedCount} von {weapons.length} angepasst
-          </span>
+          {tab !== "zones" && (
+            <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 14 }}>
+              <input
+                type="checkbox"
+                checked={onlyChanged}
+                onChange={(event) => setOnlyChanged(event.target.checked)}
+              />
+              Nur angepasste
+            </label>
+          )}
 
           {canEdit && (
             <button className="primary" onClick={() => void save()} disabled={busy}>
@@ -261,89 +287,194 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
             </button>
           )}
         </div>
-
-        <p style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 10 }}>
-          Der graue Wert im Feld ist der Ausgangswert aus dem Addon. Leer lassen heißt:
-          so belassen. Eingetragene Werte überschreiben ihn, ohne das Addon anzufassen —
-          ein Update der ArcCW-Pakete löscht deine Anpassungen also nicht.
-        </p>
       </div>
 
-      <div className="card" style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+      {tab === "weapons" && (
+        <Grid
+          fields={WEAPON_FIELDS}
+          sheet={weaponSheet}
+          setSheet={setWeaponSheet}
+          canEdit={canEdit}
+          withNote
+          rows={weapons
+            .filter((weapon) => matches(weapon.class, [weapon.name, weapon.category], search))
+            .filter((weapon) => !onlyChanged || hasValue(weaponSheet, weapon.class, WEAPON_KEYS))
+            .map((weapon) => ({
+              id: weapon.class,
+              title: weapon.name,
+              subtitle: weapon.class,
+              defaults: weapon.defaults,
+            }))}
+          intro={
+            <p style={{ fontSize: 13, color: "var(--text-muted)" }}>
+              Der graue Wert ist der Ausgangswert aus dem Addon. Leer lassen heißt: so
+              belassen. Schuss/Minute rechnet der Server in den Schussabstand um, den ArcCW
+              tatsächlich benutzt.
+            </p>
+          }
+        />
+      )}
+
+      {tab === "zones" && (
+        <ZoneEditor
+          weapons={weapons}
+          sheet={zoneSheet}
+          setSheet={setZoneSheet}
+          canEdit={canEdit}
+          search={search}
+        />
+      )}
+
+      {tab === "attachments" && (
+        <Grid
+          fields={ATTACHMENT_FIELDS}
+          sheet={attSheet}
+          setSheet={setAttSheet}
+          canEdit={canEdit}
+          withNote
+          rows={attachments
+            .filter((att) => matches(att.id, [att.name, att.slot], search))
+            .filter((att) => !onlyChanged || hasValue(attSheet, att.id, ATTACHMENT_KEYS))
+            .map((att) => ({
+              id: att.id,
+              title: att.name,
+              subtitle: `${att.id}${att.slot ? ` · ${att.slot}` : ""}`,
+              defaults: att.defaults,
+            }))}
+          intro={
+            attachments.length === 0 ? (
+              <p style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                Der Server hat keine Aufsätze gemeldet. <code>pd_arccw_probe</code> in der
+                Serverkonsole zeigt, unter welchem Namen ArcCW sie führt.
+              </p>
+            ) : (
+              <p style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                Faktoren auf den Wert der Waffe: 1 heißt unverändert, 0,9 sind zehn Prozent
+                weniger, 1,2 zwanzig Prozent mehr.
+              </p>
+            )
+          }
+        />
+      )}
+    </div>
+  );
+}
+
+function matches(id: string, extra: string[], search: string): boolean {
+  const needle = search.trim().toLowerCase();
+  if (needle === "") return true;
+
+  return [id, ...extra].some((text) => text.toLowerCase().includes(needle));
+}
+
+function hasValue(sheet: Sheet, id: string, keys: string[]): boolean {
+  const entry = sheet[id] ?? {};
+
+  return keys.some((key) => (entry[key] ?? "") !== "");
+}
+
+/**
+ * Eine Zeile je Eintrag, eine Spalte je Feld. Ein Feld zeigt den Ausgangswert
+ * als Platzhalter und färbt seinen Rand, sobald etwas darin steht.
+ */
+function Grid({
+  fields,
+  rows,
+  sheet,
+  setSheet,
+  canEdit,
+  withNote,
+  intro,
+}: {
+  fields: FieldSpec[];
+  rows: Array<{ id: string; title: string; subtitle: string; defaults: Values }>;
+  sheet: Sheet;
+  setSheet: (updater: (previous: Sheet) => Sheet) => void;
+  canEdit: boolean;
+  withNote?: boolean;
+  intro?: React.ReactNode;
+}) {
+  function set(id: string, key: string, value: string) {
+    setSheet((previous) => ({ ...previous, [id]: { ...previous[id], [key]: value } }));
+  }
+
+  function reset(id: string) {
+    setSheet((previous) => ({ ...previous, [id]: {} }));
+  }
+
+  return (
+    <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {intro}
+
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr>
-              <th style={th}>Waffe</th>
-              {FIELDS.map((field) => (
+              <th style={{ ...th, position: "sticky", left: 0, background: "var(--bg-panel)" }}>
+                Eintrag
+              </th>
+              {fields.map((field) => (
                 <th key={field.key} style={{ ...th, textAlign: "right" }}>
                   {field.label}
-                  {field.hint && (
+                  {(field.unit || field.hint) && (
                     <span style={{ display: "block", fontWeight: 400, opacity: 0.6 }}>
-                      {field.hint}
+                      {field.unit ?? field.hint}
                     </span>
                   )}
                 </th>
               ))}
-              <th style={th}>Notiz</th>
+              {withNote && <th style={th}>Notiz</th>}
               <th style={th} />
             </tr>
           </thead>
 
           <tbody>
-            {visible.map((weapon) => {
-              const entry = draft[weapon.class] ?? {};
-              const touched = FIELDS.some((field) => (entry[field.key] ?? "") !== "");
+            {rows.map((row) => {
+              const entry = sheet[row.id] ?? {};
+              const touched = fields.some((field) => (entry[field.key] ?? "") !== "");
 
               return (
-                <tr key={weapon.class}>
-                  <td style={td}>
-                    <div style={{ fontWeight: 600 }}>{weapon.name}</div>
-                    <div
-                      style={{
-                        fontFamily: "Consolas, monospace",
-                        fontSize: 11,
-                        color: "var(--text-muted)",
-                      }}
-                    >
-                      {weapon.class}
-                    </div>
+                <tr key={row.id}>
+                  <td style={{ ...td, position: "sticky", left: 0, background: "var(--bg-panel)" }}>
+                    <div style={{ fontWeight: 600 }}>{row.title}</div>
+                    <div style={mono}>{row.subtitle}</div>
                   </td>
 
-                  {FIELDS.map((field) => (
+                  {fields.map((field) => (
                     <td key={field.key} style={{ ...td, textAlign: "right" }}>
                       <input
                         value={entry[field.key] ?? ""}
-                        onChange={(event) => set(weapon.class, field.key, event.target.value)}
-                        placeholder={String(weapon.defaults[field.key])}
+                        onChange={(event) => set(row.id, field.key, event.target.value)}
+                        placeholder={format(row.defaults[field.key])}
                         disabled={!canEdit}
                         inputMode="decimal"
                         style={{
                           ...inputStyle,
-                          width: 78,
+                          width: 76,
                           textAlign: "right",
                           fontVariantNumeric: "tabular-nums",
                           borderColor:
-                            (entry[field.key] ?? "") !== ""
-                              ? "var(--accent, #3a86d4)"
-                              : "var(--border)",
+                            (entry[field.key] ?? "") !== "" ? "#3a86d4" : "var(--border)",
                         }}
                       />
                     </td>
                   ))}
 
-                  <td style={td}>
-                    <input
-                      value={entry.note ?? ""}
-                      onChange={(event) => set(weapon.class, "note", event.target.value)}
-                      placeholder="warum geändert"
-                      disabled={!canEdit}
-                      style={{ ...inputStyle, minWidth: 140 }}
-                    />
-                  </td>
+                  {withNote && (
+                    <td style={td}>
+                      <input
+                        value={entry.__note ?? ""}
+                        onChange={(event) => set(row.id, "__note", event.target.value)}
+                        placeholder="warum geändert"
+                        disabled={!canEdit}
+                        style={{ ...inputStyle, minWidth: 130 }}
+                      />
+                    </td>
+                  )}
 
                   <td style={td}>
                     {canEdit && touched && (
-                      <button type="button" onClick={() => reset(weapon.class)}>
+                      <button type="button" onClick={() => reset(row.id)}>
                         Zurücksetzen
                       </button>
                     )}
@@ -353,15 +484,183 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
             })}
           </tbody>
         </table>
-
-        {visible.length === 0 && (
-          <p style={{ color: "var(--text-muted)", fontSize: 13 }}>
-            Keine Waffe passt zur Suche.
-          </p>
-        )}
       </div>
+
+      {rows.length === 0 && (
+        <p style={{ color: "var(--text-muted)", fontSize: 13 }}>Nichts passt zur Suche.</p>
+      )}
     </div>
   );
+}
+
+/**
+ * Trefferzonen.
+ *
+ * Oben die allgemeine Regel für alle Waffen, darunter Ausnahmen je Waffe. Der
+ * Faktor wirkt zusätzlich zu dem, was ArcCW ohnehin schon rechnet — 1 heißt
+ * also unverändert, nicht "kein Kopfschussbonus".
+ */
+function ZoneEditor({
+  weapons,
+  sheet,
+  setSheet,
+  canEdit,
+  search,
+}: {
+  weapons: Weapon[];
+  sheet: Sheet;
+  setSheet: (updater: (previous: Sheet) => Sheet) => void;
+  canEdit: boolean;
+  search: string;
+}) {
+  const [adding, setAdding] = useState("");
+
+  const exceptions = useMemo(
+    () => Object.keys(sheet).filter((key) => key !== "*").sort(),
+    [sheet],
+  );
+
+  const candidates = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+
+    return weapons
+      .filter((weapon) => !(weapon.class in sheet))
+      .filter(
+        (weapon) =>
+          needle === "" ||
+          weapon.class.toLowerCase().includes(needle) ||
+          weapon.name.toLowerCase().includes(needle),
+      )
+      .slice(0, 40);
+  }, [weapons, sheet, search]);
+
+  const byClass = useMemo(
+    () => new Map(weapons.map((weapon) => [weapon.class, weapon])),
+    [weapons],
+  );
+
+  function set(id: string, key: string, value: string) {
+    setSheet((previous) => ({ ...previous, [id]: { ...previous[id], [key]: value } }));
+  }
+
+  function drop(id: string) {
+    setSheet((previous) => {
+      const next = { ...previous };
+      delete next[id];
+      return next;
+    });
+  }
+
+  const rows: Array<{ id: string; title: string; subtitle: string }> = [
+    { id: "*", title: "Alle Waffen", subtitle: "Grundregel" },
+    ...exceptions.map((className) => ({
+      id: className,
+      title: byClass.get(className)?.name ?? className,
+      subtitle: className,
+    })),
+  ];
+
+  return (
+    <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <p style={{ fontSize: 13, color: "var(--text-muted)" }}>
+        Faktor auf den Schaden je getroffener Körperstelle. 1 heißt unverändert, 2 ist
+        doppelter Schaden, 0,5 halber. Der Wert wirkt <strong>zusätzlich</strong> zu dem,
+        was ArcCW selbst schon rechnet — ein Kopfschuss bringt also auch bei 1 weiterhin
+        mehr. Leer heißt: nicht anfassen.
+      </p>
+
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr>
+              <th style={th}>Gilt für</th>
+              {ZONE_FIELDS.map((field) => (
+                <th key={field.key} style={{ ...th, textAlign: "right" }}>
+                  {field.label}
+                </th>
+              ))}
+              <th style={th} />
+            </tr>
+          </thead>
+
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.id}>
+                <td style={td}>
+                  <div style={{ fontWeight: 600 }}>{row.title}</div>
+                  <div style={mono}>{row.subtitle}</div>
+                </td>
+
+                {ZONE_FIELDS.map((field) => (
+                  <td key={field.key} style={{ ...td, textAlign: "right" }}>
+                    <input
+                      value={sheet[row.id]?.[field.key] ?? ""}
+                      onChange={(event) => set(row.id, field.key, event.target.value)}
+                      placeholder="1"
+                      disabled={!canEdit}
+                      inputMode="decimal"
+                      style={{
+                        ...inputStyle,
+                        width: 72,
+                        textAlign: "right",
+                        fontVariantNumeric: "tabular-nums",
+                        borderColor:
+                          (sheet[row.id]?.[field.key] ?? "") !== ""
+                            ? "#3a86d4"
+                            : "var(--border)",
+                      }}
+                    />
+                  </td>
+                ))}
+
+                <td style={td}>
+                  {canEdit && row.id !== "*" && (
+                    <button type="button" onClick={() => drop(row.id)}>
+                      Entfernen
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {canEdit && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <select
+            value={adding}
+            onChange={(event) => setAdding(event.target.value)}
+            style={{ ...inputStyle, maxWidth: 360 }}
+          >
+            <option value="">Ausnahme für eine bestimmte Waffe …</option>
+            {candidates.map((weapon) => (
+              <option key={weapon.class} value={weapon.class}>
+                {weapon.name} ({weapon.class})
+              </option>
+            ))}
+          </select>
+
+          <button
+            type="button"
+            disabled={adding === ""}
+            onClick={() => {
+              setSheet((previous) => ({ ...previous, [adding]: {} }));
+              setAdding("");
+            }}
+          >
+            Hinzufügen
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function format(value: number | undefined): string {
+  if (value === undefined) return "";
+
+  return Number.isInteger(value) ? String(value) : String(Math.round(value * 1000) / 1000);
 }
 
 const th: React.CSSProperties = {
@@ -379,4 +678,10 @@ const td: React.CSSProperties = {
   padding: "8px 10px",
   borderBottom: "1px solid var(--border)",
   verticalAlign: "top",
+};
+
+const mono: React.CSSProperties = {
+  fontFamily: "Consolas, monospace",
+  fontSize: 11,
+  color: "var(--text-muted)",
 };

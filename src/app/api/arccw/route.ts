@@ -6,115 +6,175 @@ import { query, transaction } from "@/lib/db";
 import { reloadServer } from "@/lib/pterodactyl";
 import { checkRateLimit, rateLimitKey } from "@/lib/rateLimit";
 import { getActiveServer } from "@/lib/servers";
+import {
+  ATTACHMENT_KEYS,
+  WEAPON_KEYS,
+  ZONE_KEYS,
+  readList,
+  readValues,
+  type Values,
+} from "@/lib/arccw";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Schadenswerte der ArcCW-Waffen.
+ * Werte der ArcCW-Waffen: Waffen selbst, Trefferzonen, Aufsätze.
  *
- * Zwei Tabellen, beide vom Gamemode-Modul modules/arccw angelegt:
- *
- *   pd_arccw_stats      die Ausgangswerte aus dem Addon, nur zur Anzeige
- *   pd_arccw_overrides  die Abweichungen; NULL heißt "Ausgangswert behalten"
- *
- * Das Addon selbst wird nie angefasst. Ein Update der ArcCW-Pakete überschreibt
- * deshalb keine Anpassung.
+ * Die Tabellen legt das Gamemode-Modul modules/arccw an. Die Ausgangswerte aus
+ * dem Addon stehen in pd_arccw_stats und pd_arccw_atts und sind nur zur Anzeige;
+ * geändert wird ausschließlich in den Override-Tabellen. Ein fehlender Wert
+ * heißt dort "Ausgangswert behalten" — das Addon selbst wird nie angefasst.
  */
 
-const FIELDS = [
-  "damage",
-  "damage_min",
-  "range_min",
-  "range",
-  "penetration",
-  "num",
-] as const;
-
-type FieldKey = (typeof FIELDS)[number];
-
-export interface WeaponRow {
+interface WeaponRow {
   class: string;
   name: string;
   category: string;
-  defaults: Record<FieldKey, number>;
-  override: Partial<Record<FieldKey, number>>;
+  slots: string[];
+  defaults: Values;
+  override: Values;
   note: string;
-  updatedAt: number;
+}
+
+interface AttachmentRow {
+  id: string;
+  name: string;
+  slot: string;
+  defaults: Values;
+  override: Values;
+  note: string;
+}
+
+interface ZoneRow {
+  class: string;
+  values: Values;
 }
 
 async function tablesExist(): Promise<boolean> {
   const rows = await query<{ c: number }>(
     "SELECT COUNT(*) AS c FROM information_schema.tables " +
       "WHERE table_schema = DATABASE() AND table_name IN " +
-      "('pd_arccw_stats', 'pd_arccw_overrides')",
+      "('pd_arccw_stats', 'pd_arccw_overrides', 'pd_arccw_atts', " +
+      "'pd_arccw_att_over', 'pd_arccw_zones')",
   );
 
-  return Number(rows[0]?.c ?? 0) >= 2;
+  return Number(rows[0]?.c ?? 0) >= 5;
 }
 
-async function loadWeapons(): Promise<WeaponRow[]> {
-  const server = await getActiveServer();
+async function load(): Promise<{
+  weapons: WeaponRow[];
+  attachments: AttachmentRow[];
+  zones: ZoneRow[];
+}> {
+  const key = (await getActiveServer()).serverKey;
 
-  const [stats, overrides] = await Promise.all([
+  const [stats, overrides, atts, attOver, zones] = await Promise.all([
     query<Record<string, unknown>>(
       "SELECT * FROM `pd_arccw_stats` WHERE `server_key` = ? ORDER BY `category`, `name`",
-      [server.serverKey],
+      [key],
     ),
     query<Record<string, unknown>>(
       "SELECT * FROM `pd_arccw_overrides` WHERE `server_key` = ?",
-      [server.serverKey],
+      [key],
+    ),
+    query<Record<string, unknown>>(
+      "SELECT * FROM `pd_arccw_atts` WHERE `server_key` = ? ORDER BY `slot`, `name`",
+      [key],
+    ),
+    query<Record<string, unknown>>(
+      "SELECT * FROM `pd_arccw_att_over` WHERE `server_key` = ?",
+      [key],
+    ),
+    query<Record<string, unknown>>(
+      "SELECT * FROM `pd_arccw_zones` WHERE `server_key` = ?",
+      [key],
     ),
   ]);
 
-  const byClass = new Map(overrides.map((row) => [String(row.class), row]));
+  const weaponOverrides = new Map(overrides.map((row) => [String(row.class), row]));
+  const attOverrides = new Map(attOver.map((row) => [String(row.att_id), row]));
 
-  return stats.map((row) => {
-    const override = byClass.get(String(row.class));
-    const changed: Partial<Record<FieldKey, number>> = {};
-
-    for (const field of FIELDS) {
-      const value = override?.[field];
-
-      // NULL bleibt NULL: nicht gesetzt ist etwas anderes als auf 0 gesetzt.
-      if (value !== null && value !== undefined) {
-        changed[field] = Number(value);
-      }
-    }
-
-    const defaults = {} as Record<FieldKey, number>;
-    for (const field of FIELDS) defaults[field] = Number(row[field] ?? 0);
-
-    return {
+  return {
+    weapons: stats.map((row) => ({
       class: String(row.class),
       name: String(row.name ?? row.class),
       category: String(row.category ?? ""),
-      defaults,
-      override: changed,
-      note: String(override?.note ?? ""),
-      updatedAt: Number(override?.updated_at ?? 0),
-    };
-  });
+      slots: readList(row.slots_json),
+      defaults: readValues(row.stats_json, WEAPON_KEYS),
+      override: readValues(
+        weaponOverrides.get(String(row.class))?.values_json,
+        WEAPON_KEYS,
+      ),
+      note: String(weaponOverrides.get(String(row.class))?.note ?? ""),
+    })),
+
+    attachments: atts.map((row) => ({
+      id: String(row.att_id),
+      name: String(row.name ?? row.att_id),
+      slot: String(row.slot ?? ""),
+      defaults: readValues(row.stats_json, ATTACHMENT_KEYS),
+      override: readValues(
+        attOverrides.get(String(row.att_id))?.values_json,
+        ATTACHMENT_KEYS,
+      ),
+      note: String(attOverrides.get(String(row.att_id))?.note ?? ""),
+    })),
+
+    zones: zones.map((row) => ({
+      class: String(row.class),
+      values: readValues(row.values_json, ZONE_KEYS),
+    })),
+  };
 }
 
-// Ein Feld ist entweder eine Zahl oder ausdrücklich nicht gesetzt.
-const value = z.number().min(0).max(100_000).nullable();
+// null heißt ausdrücklich "nicht gesetzt" und ist etwas anderes als 0.
+const numbers = z.record(z.string(), z.number().min(0).max(1_000_000).nullable());
 
 const schema = z.object({
-  changes: z
+  weapons: z
     .array(
       z.object({
         class: z.string().min(1).max(128),
-        damage: value,
-        damage_min: value,
-        range_min: value,
-        range: value,
-        penetration: value,
-        num: z.number().int().min(1).max(64).nullable(),
+        values: numbers,
         note: z.string().max(255).default(""),
       }),
     )
-    .max(2000),
+    .max(3000),
+  attachments: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(128),
+        values: numbers,
+        note: z.string().max(255).default(""),
+      }),
+    )
+    .max(3000),
+  zones: z
+    .array(
+      z.object({
+        class: z.string().min(1).max(128),
+        values: numbers,
+      }),
+    )
+    .max(3000),
 });
+
+/** Nur gesetzte Zahlen behalten - der Rest bleibt Ausgangswert. */
+function compact(values: Record<string, number | null>, keys: string[]): Values | null {
+  const out: Values = {};
+  let any = false;
+
+  for (const key of keys) {
+    const value = values[key];
+
+    if (value !== null && value !== undefined && Number.isFinite(value)) {
+      out[key] = value;
+      any = true;
+    }
+  }
+
+  return any ? out : null;
+}
 
 function fail(error: unknown, where: string) {
   if (error instanceof AuthError) {
@@ -143,19 +203,19 @@ export async function GET() {
       });
     }
 
-    const weapons = await loadWeapons();
+    const data = await load();
 
-    if (weapons.length === 0) {
+    if (data.weapons.length === 0) {
       return NextResponse.json({
         configured: true,
-        weapons: [],
+        ...data,
         hint:
           "Der Server hat noch keine ArcCW-Waffen gemeldet. pd_arccw_status in der " +
           "Serverkonsole zeigt, ob das Modul welche gefunden hat.",
       });
     }
 
-    return NextResponse.json({ configured: true, weapons });
+    return NextResponse.json({ configured: true, ...data });
   } catch (error) {
     return fail(error, "Laden fehlgeschlagen");
   }
@@ -192,23 +252,29 @@ export async function POST(request: Request) {
   }
 
   try {
-    const server = await getActiveServer();
-    const before = await loadWeapons();
+    const key = (await getActiveServer()).serverKey;
+    const before = await load();
 
-    // Nur Klassen zulassen, die der Server auch gemeldet hat. Ein Tippfehler
-    // würde sonst als Karteileiche in der Tabelle liegen bleiben.
-    const known = new Set(before.map((weapon) => weapon.class));
-    const unknown = parsed.data.changes.filter((entry) => !known.has(entry.class));
+    // Nur Klassen und Aufsätze zulassen, die der Server gemeldet hat. Ein
+    // Tippfehler bliebe sonst als Karteileiche in der Tabelle liegen. Der
+    // Schlüssel "*" ist die allgemeine Trefferzonen-Regel für alle Waffen.
+    const knownClasses = new Set(before.weapons.map((weapon) => weapon.class));
+    const knownAtts = new Set(before.attachments.map((att) => att.id));
 
-    if (unknown.length > 0) {
+    const strays = [
+      ...parsed.data.weapons.filter((entry) => !knownClasses.has(entry.class)).map((e) => e.class),
+      ...parsed.data.attachments.filter((entry) => !knownAtts.has(entry.id)).map((e) => e.id),
+      ...parsed.data.zones
+        .filter((entry) => entry.class !== "*" && !knownClasses.has(entry.class))
+        .map((e) => e.class),
+    ];
+
+    if (strays.length > 0) {
       return NextResponse.json(
         {
           error:
-            `${unknown.length} Waffenklasse(n) hat der Server nicht gemeldet: ` +
-            unknown
-              .slice(0, 5)
-              .map((entry) => entry.class)
-              .join(", "),
+            `${strays.length} Eintrag/Einträge hat der Server nicht gemeldet: ` +
+            strays.slice(0, 5).join(", "),
         },
         { status: 400 },
       );
@@ -217,42 +283,68 @@ export async function POST(request: Request) {
     const now = Math.floor(Date.now() / 1000);
 
     await transaction(async (conn) => {
-      await conn.execute("DELETE FROM `pd_arccw_overrides` WHERE `server_key` = ?", [
-        server.serverKey,
-      ]);
+      for (const table of ["pd_arccw_overrides", "pd_arccw_att_over", "pd_arccw_zones"]) {
+        await conn.execute(`DELETE FROM \`${table}\` WHERE \`server_key\` = ?`, [key]);
+      }
 
-      for (const entry of parsed.data.changes) {
-        const numbers = FIELDS.map((field) => entry[field]);
-
-        // Eine Zeile ohne einen einzigen gesetzten Wert ist keine Anpassung.
-        if (numbers.every((number) => number === null)) continue;
+      for (const entry of parsed.data.weapons) {
+        const values = compact(entry.values, WEAPON_KEYS);
+        if (!values) continue;
 
         await conn.execute(
-          "INSERT INTO `pd_arccw_overrides` " +
-            "(`server_key`, `class`, `damage`, `damage_min`, `range_min`, `range`," +
-            " `penetration`, `num`, `note`, `updated_at`) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          [server.serverKey, entry.class, ...numbers, entry.note, now],
+          "INSERT INTO `pd_arccw_overrides` (`server_key`, `class`, `values_json`, `note`, `updated_at`) " +
+            "VALUES (?, ?, ?, ?, ?)",
+          [key, entry.class, JSON.stringify(values), entry.note, now],
+        );
+      }
+
+      for (const entry of parsed.data.attachments) {
+        const values = compact(entry.values, ATTACHMENT_KEYS);
+        if (!values) continue;
+
+        await conn.execute(
+          "INSERT INTO `pd_arccw_att_over` (`server_key`, `att_id`, `values_json`, `note`, `updated_at`) " +
+            "VALUES (?, ?, ?, ?, ?)",
+          [key, entry.id, JSON.stringify(values), entry.note, now],
+        );
+      }
+
+      for (const entry of parsed.data.zones) {
+        const values = compact(entry.values, ZONE_KEYS);
+        if (!values) continue;
+
+        await conn.execute(
+          "INSERT INTO `pd_arccw_zones` (`server_key`, `class`, `values_json`, `updated_at`) " +
+            "VALUES (?, ?, ?, ?)",
+          [key, entry.class, JSON.stringify(values), now],
         );
       }
     });
 
-    const after = await loadWeapons();
+    const after = await load();
 
     await writeAudit({
       user,
       action: "arccw.save",
       targetType: "arccw",
       targetKey: "overrides",
-      before: before.filter((weapon) => Object.keys(weapon.override).length > 0),
-      after: after.filter((weapon) => Object.keys(weapon.override).length > 0),
+      before: {
+        weapons: before.weapons.filter((w) => Object.keys(w.override).length > 0),
+        attachments: before.attachments.filter((a) => Object.keys(a.override).length > 0),
+        zones: before.zones,
+      },
+      after: {
+        weapons: after.weapons.filter((w) => Object.keys(w.override).length > 0),
+        attachments: after.attachments.filter((a) => Object.keys(a.override).length > 0),
+        zones: after.zones,
+      },
     });
 
     const reload = await reloadServer("arccw");
 
     return NextResponse.json({
       ok: true,
-      weapons: after,
+      ...after,
       reload: { ok: reload.ok, message: reload.message },
     });
   } catch (error) {

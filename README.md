@@ -105,6 +105,7 @@ pd_status
 pd_assets_write
 pd_arccw_write
 pd_arccw_status [waffenklasse]
+pd_arccw_probe [waffenklasse]
 pd_admin_say <text>
 pd_announce <Titel> | <Text> [| Sekunden]
 pd_admin_kick <steamid64> [grund]
@@ -125,7 +126,7 @@ Läuft mehr als ein Server auf derselben Datenbank, unterscheidet das ConVar
 | Jobs & Einheiten | Baum aus Unit, Untereinheit und Job; Export und Import |
 | Fortbildungen | Katalog und Inhaber |
 | Waffen & Gewichte | Kategorien, Gewichte, Tragelast, Rechner zum Durchspielen |
-| ArcCW-Schaden | Schaden, Reichweiten und Durchschlag der ArcCW-Waffen |
+| ArcCW-Schaden | Waffenwerte, Trefferzonen und Aufsätze der ArcCW-Waffen |
 | Spieler & Charaktere | Suche und Einsicht (nur lesend, siehe unten) |
 | Werkzeuge | Ausrüstungs-Prüfung, Sicherungen, Serverkonsole |
 | Änderungsprotokoll | Wer hat wann was geändert, mit Rücknahme |
@@ -153,6 +154,26 @@ an. Geändert wird nie das Addon selbst — ein Update der ArcCW-Pakete
 
 Ein leeres Feld im Panel heißt „Ausgangswert behalten". Nur ausgefüllte Felder
 landen in der Datenbank, und ein Leeren stellt den Originalwert wieder her.
+
+Drei Bereiche:
+
+| Bereich | Was |
+|---|---|
+| Waffen | Schaden, Reichweiten, Durchschlag, Schuss/Minute, Rückstoß, Streuung, Zielzeit, Tempo |
+| Trefferzonen | Schadensfaktor je Körperstelle — eine Grundregel für alle Waffen, Ausnahmen je Waffe |
+| Aufsätze | Die Faktoren der Attachments (Schaden, Feuerrate, Reichweite, Rückstoß …) |
+
+Die Trefferzonen laufen über `ScalePlayerDamage` im Gamemode, nicht über eine
+Tabelle in ArcCW: die getroffene Körperstelle steht nur in diesem Hook zur
+Verfügung. Der Faktor wirkt deshalb **zusätzlich** zu dem, was ArcCW ohnehin
+schon rechnet — 1 heißt unverändert, nicht „kein Kopfschussbonus".
+
+Schuss pro Minute steht in ArcCW nicht als Rate, sondern als Abstand zwischen
+zwei Schüssen (`Delay`). Das Panel zeigt die Rate und rechnet beim Speichern um.
+
+Das ArcCW-Grundaddon liegt als Workshop-Paket vor und damit nicht auf der
+Platte. Unter welchem Namen es seine Aufsätze führt, lässt sich deshalb nicht
+nachlesen — `pd_arccw_probe` in der Serverkonsole zeigt es.
 
 Die Werte gehen auch an die Clients: den Schaden rechnet zwar der Server aus,
 aber ArcCW zeigt die Zahlen im Waffenmenü an, und die kämen sonst aus der

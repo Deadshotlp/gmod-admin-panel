@@ -152,8 +152,10 @@ ArcCW-Waffen bringen ihre Werte fest im Addon mit. Das Gamemode-Modul
 an. Geändert wird nie das Addon selbst — ein Update der ArcCW-Pakete
 überschreibt deshalb keine Anpassung.
 
-Ein leeres Feld im Panel heißt „Ausgangswert behalten". Nur ausgefüllte Felder
-landen in der Datenbank, und ein Leeren stellt den Originalwert wieder her.
+In den Feldern steht der Wert, mit dem die Waffe gerade läuft — die eigene
+Änderung, sonst der Ausgangswert aus dem Addon. Gespeichert wird nur, was davon
+abweicht; ein Feld zu leeren stellt den Ausgangswert wieder her. Geänderte
+Felder sind blau umrandet.
 
 Drei Bereiche:
 

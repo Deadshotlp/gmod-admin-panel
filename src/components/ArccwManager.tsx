@@ -82,14 +82,46 @@ function toNumber(text: string): number | null {
   return Number.isFinite(value) ? value : Number.NaN;
 }
 
-function sheetFrom(rows: Array<{ id: string; values: Values; note?: string }>): Sheet {
+/**
+ * Steht im Feld noch der Ausgangswert?
+ *
+ * Danach entscheidet sich, ob eine Abweichung in die Datenbank wandert. Es
+ * genügt nicht, auf Gleichheit der Zahlen zu prüfen: "0,20" und "0.2" sind
+ * dasselbe, und der angezeigte Wert ist auf drei Stellen gerundet. Deshalb erst
+ * der Text, dann die Zahl mit Spielraum.
+ */
+function sameAsDefault(text: string, fallback: number | undefined): boolean {
+  const trimmed = text.trim();
+
+  // Leergeräumt heißt: zurück auf den Ausgangswert.
+  if (trimmed === "") return true;
+  if (fallback === undefined) return false;
+  if (trimmed === format(fallback)) return true;
+
+  const value = Number(trimmed.replace(",", "."));
+  if (!Number.isFinite(value)) return false;
+
+  return Math.abs(value - fallback) <= Math.max(1e-9, Math.abs(fallback) * 1e-9);
+}
+
+/**
+ * Die Felder werden mit dem Wert gefüllt, den die Waffe gerade hat — also der
+ * eigenen Änderung, sonst dem Ausgangswert aus dem Addon. Man liest damit
+ * immer den geltenden Wert und muss ihn nicht aus Platzhalter und Eingabe
+ * zusammensetzen.
+ */
+function sheetFrom(
+  rows: Array<{ id: string; defaults: Values; override: Values; note?: string }>,
+  keys: string[],
+): Sheet {
   const sheet: Sheet = {};
 
   for (const row of rows) {
     const entry: Record<string, string> = {};
 
-    for (const [key, value] of Object.entries(row.values)) {
-      entry[key] = String(value);
+    for (const key of keys) {
+      const value = row.override[key] ?? row.defaults[key];
+      entry[key] = value === undefined ? "" : format(value);
     }
 
     if (row.note !== undefined) entry.__note = row.note;
@@ -98,6 +130,9 @@ function sheetFrom(rows: Array<{ id: string; values: Values; note?: string }>): 
 
   return sheet;
 }
+
+/** Trefferzonen haben keinen Ausgangswert im Addon: 1 heißt unverändert. */
+const ZONE_DEFAULTS: Values = Object.fromEntries(ZONE_KEYS.map((key) => [key, 1]));
 
 export default function ArccwManager({ user }: { user: PanelUser }) {
   const canEdit = user.role !== "viewer";
@@ -120,9 +155,11 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
       sheetFrom(
         (payload.weapons ?? []).map((weapon) => ({
           id: weapon.class,
-          values: weapon.override,
+          defaults: weapon.defaults,
+          override: weapon.override,
           note: weapon.note,
         })),
+        WEAPON_KEYS,
       ),
     );
 
@@ -130,14 +167,29 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
       sheetFrom(
         (payload.attachments ?? []).map((att) => ({
           id: att.id,
-          values: att.override,
+          defaults: att.defaults,
+          override: att.override,
           note: att.note,
         })),
+        ATTACHMENT_KEYS,
       ),
     );
 
+    // Die Grundregel für alle Waffen gibt es immer, auch wenn nichts gesetzt ist.
+    const zoneRows = payload.zones ?? [];
+    const withGeneral = zoneRows.some((zone) => zone.class === "*")
+      ? zoneRows
+      : [{ class: "*", values: {} as Values }, ...zoneRows];
+
     setZoneSheet(
-      sheetFrom((payload.zones ?? []).map((zone) => ({ id: zone.class, values: zone.values }))),
+      sheetFrom(
+        withGeneral.map((zone) => ({
+          id: zone.class,
+          defaults: ZONE_DEFAULTS,
+          override: zone.values,
+        })),
+        ZONE_KEYS,
+      ),
     );
 
     setBlocks(
@@ -177,11 +229,17 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
     setBusy(true);
     setMessage(null);
 
-    function collect(sheet: Sheet, keys: string[], id: string) {
+    // Nur was vom Ausgangswert abweicht, ist eine Änderung. Damit bleibt die
+    // Datenbank frei von Zeilen, die nur den Originalwert wiederholen.
+    function collect(sheet: Sheet, keys: string[], id: string, defaults: Values) {
       const entry = sheet[id] ?? {};
       const values: Record<string, number | null> = {};
 
-      for (const key of keys) values[key] = toNumber(entry[key] ?? "");
+      for (const key of keys) {
+        const text = entry[key] ?? "";
+
+        values[key] = sameAsDefault(text, defaults[key]) ? null : toNumber(text);
+      }
 
       return { values, note: entry.__note ?? "" };
     }
@@ -189,15 +247,15 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
     const body = {
       weapons: weapons.map((weapon) => ({
         class: weapon.class,
-        ...collect(weaponSheet, WEAPON_KEYS, weapon.class),
+        ...collect(weaponSheet, WEAPON_KEYS, weapon.class, weapon.defaults),
       })),
       attachments: attachments.map((att) => ({
         id: att.id,
-        ...collect(attSheet, ATTACHMENT_KEYS, att.id),
+        ...collect(attSheet, ATTACHMENT_KEYS, att.id, att.defaults),
       })),
       zones: Object.keys(zoneSheet).map((className) => ({
         class: className,
-        ...collect(zoneSheet, ZONE_KEYS, className),
+        ...collect(zoneSheet, ZONE_KEYS, className, ZONE_DEFAULTS),
       })),
       blocks: Object.entries(blocks)
         .filter(([, atts]) => atts.length > 0)
@@ -313,7 +371,11 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
           withNote
           rows={weapons
             .filter((weapon) => matches(weapon.class, [weapon.name, weapon.category], search))
-            .filter((weapon) => !onlyChanged || hasValue(weaponSheet, weapon.class, WEAPON_KEYS))
+            .filter(
+              (weapon) =>
+                !onlyChanged ||
+                hasChange(weaponSheet, weapon.class, WEAPON_KEYS, weapon.defaults),
+            )
             .map((weapon) => ({
               id: weapon.class,
               title: weapon.name,
@@ -322,9 +384,10 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
             }))}
           intro={
             <p style={{ fontSize: 13, color: "var(--text-muted)" }}>
-              Der graue Wert ist der Ausgangswert aus dem Addon. Leer lassen heißt: so
-              belassen. Schuss/Minute rechnet der Server in den Schussabstand um, den ArcCW
-              tatsächlich benutzt.
+              In den Feldern steht, womit die Waffe gerade läuft. Geänderte Werte sind blau
+              umrandet; gespeichert wird nur, was vom Ausgangswert abweicht. Ein Feld
+              leeren stellt den Ausgangswert wieder her. Schuss/Minute rechnet der Server
+              in den Schussabstand um, den ArcCW tatsächlich benutzt.
             </p>
           }
         />
@@ -349,7 +412,10 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
           withNote
           rows={attachments
             .filter((att) => matches(att.id, [att.name, att.slot], search))
-            .filter((att) => !onlyChanged || hasValue(attSheet, att.id, ATTACHMENT_KEYS))
+            .filter(
+              (att) =>
+                !onlyChanged || hasChange(attSheet, att.id, ATTACHMENT_KEYS, att.defaults),
+            )
             .map((att) => ({
               id: att.id,
               title: att.name,
@@ -365,7 +431,8 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
             ) : (
               <p style={{ fontSize: 13, color: "var(--text-muted)" }}>
                 Faktoren auf den Wert der Waffe: 1 heißt unverändert, 0,9 sind zehn Prozent
-                weniger, 1,2 zwanzig Prozent mehr.
+                weniger, 1,2 zwanzig Prozent mehr. In den Feldern steht der geltende Wert,
+                geänderte sind blau umrandet.
               </p>
             )
           }
@@ -571,10 +638,10 @@ function matches(id: string, extra: string[], search: string): boolean {
   return [id, ...extra].some((text) => text.toLowerCase().includes(needle));
 }
 
-function hasValue(sheet: Sheet, id: string, keys: string[]): boolean {
+function hasChange(sheet: Sheet, id: string, keys: string[], defaults: Values): boolean {
   const entry = sheet[id] ?? {};
 
-  return keys.some((key) => (entry[key] ?? "") !== "");
+  return keys.some((key) => !sameAsDefault(entry[key] ?? "", defaults[key]));
 }
 
 /**
@@ -602,8 +669,18 @@ function Grid({
     setSheet((previous) => ({ ...previous, [id]: { ...previous[id], [key]: value } }));
   }
 
-  function reset(id: string) {
-    setSheet((previous) => ({ ...previous, [id]: {} }));
+  // Zurücksetzen heißt hier: den Ausgangswert wieder eintragen, nicht leeren.
+  function reset(id: string, defaults: Values) {
+    setSheet((previous) => {
+      const entry: Record<string, string> = { __note: "" };
+
+      for (const field of fields) {
+        const value = defaults[field.key];
+        entry[field.key] = value === undefined ? "" : format(value);
+      }
+
+      return { ...previous, [id]: entry };
+    });
   }
 
   return (
@@ -635,7 +712,9 @@ function Grid({
           <tbody>
             {rows.map((row) => {
               const entry = sheet[row.id] ?? {};
-              const touched = fields.some((field) => (entry[field.key] ?? "") !== "");
+              const touched = fields.some(
+                (field) => !sameAsDefault(entry[field.key] ?? "", row.defaults[field.key]),
+              );
 
               return (
                 <tr key={row.id}>
@@ -650,6 +729,7 @@ function Grid({
                         value={entry[field.key] ?? ""}
                         onChange={(event) => set(row.id, field.key, event.target.value)}
                         placeholder={format(row.defaults[field.key])}
+                        title={`Ausgangswert: ${format(row.defaults[field.key])}`}
                         disabled={!canEdit}
                         inputMode="decimal"
                         style={{
@@ -657,8 +737,12 @@ function Grid({
                           width: 76,
                           textAlign: "right",
                           fontVariantNumeric: "tabular-nums",
-                          borderColor:
-                            (entry[field.key] ?? "") !== "" ? "#3a86d4" : "var(--border)",
+                          borderColor: sameAsDefault(
+                            entry[field.key] ?? "",
+                            row.defaults[field.key],
+                          )
+                            ? "var(--border)"
+                            : "#3a86d4",
                         }}
                       />
                     </td>
@@ -678,7 +762,7 @@ function Grid({
 
                   <td style={td}>
                     {canEdit && touched && (
-                      <button type="button" onClick={() => reset(row.id)}>
+                      <button type="button" onClick={() => reset(row.id, row.defaults)}>
                         Zurücksetzen
                       </button>
                     )}
@@ -808,10 +892,9 @@ function ZoneEditor({
                         width: 72,
                         textAlign: "right",
                         fontVariantNumeric: "tabular-nums",
-                        borderColor:
-                          (sheet[row.id]?.[field.key] ?? "") !== ""
-                            ? "#3a86d4"
-                            : "var(--border)",
+                        borderColor: sameAsDefault(sheet[row.id]?.[field.key] ?? "", 1)
+                          ? "var(--border)"
+                          : "#3a86d4",
                       }}
                     />
                   </td>
@@ -849,7 +932,10 @@ function ZoneEditor({
             type="button"
             disabled={adding === ""}
             onClick={() => {
-              setSheet((previous) => ({ ...previous, [adding]: {} }));
+              setSheet((previous) => ({
+                ...previous,
+                [adding]: Object.fromEntries(ZONE_FIELDS.map((field) => [field.key, "1"])),
+              }));
               setAdding("");
             }}
           >

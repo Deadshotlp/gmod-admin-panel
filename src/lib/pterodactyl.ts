@@ -277,6 +277,7 @@ export const RELOAD_AREAS = [
   "jobs",
   "fortbildung",
   "waffen",
+  "arccw",
   "fraktionen",
   "armor",
   "spawns",

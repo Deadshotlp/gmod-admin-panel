@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { PanelUser } from "@/lib/auth";
 import { Field, Notice, dateFormat, fetchWithTimeout, inputStyle, readJson } from "./ui";
+import AssetPicker from "./AssetPicker";
 
 interface Course {
   fbKey: string;
@@ -430,23 +431,26 @@ export default function FortbildungManager({ user }: { user: PanelUser }) {
                     </Field>
                   </div>
 
-                  <Field label="Ausrüstung" hint="Waffenklassen, kommagetrennt">
-                    <textarea
+                  <Field
+                    label="Ausrüstung"
+                    hint="Wird freigeschaltet, nicht ausgehändigt - abzuholen an der Waffenkiste"
+                  >
+                    <AssetPicker
+                      kind="weapon"
                       value={f("equip")}
-                      onChange={(event) => set("equip", event.target.value)}
+                      onChange={(next) => set("equip", next)}
                       disabled={!canEdit}
                       rows={2}
-                      style={{ ...inputStyle, fontFamily: "Consolas, monospace", fontSize: 13 }}
                     />
                   </Field>
 
-                  <Field label="Playermodels" hint="Modelpfade, kommagetrennt">
-                    <textarea
+                  <Field label="Playermodels" hint="Freigabe in der Umkleide">
+                    <AssetPicker
+                      kind="model"
                       value={f("model")}
-                      onChange={(event) => set("model", event.target.value)}
+                      onChange={(next) => set("model", next)}
                       disabled={!canEdit}
                       rows={2}
-                      style={{ ...inputStyle, fontFamily: "Consolas, monospace", fontSize: 13 }}
                     />
                   </Field>
 

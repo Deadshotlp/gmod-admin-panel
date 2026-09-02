@@ -100,9 +100,11 @@ legt die Tabellen `pd_server_status` und `pd_online_players` an, schreibt alle 1
 Sekunden einen Heartbeat und stellt diese Konsolenbefehle bereit:
 
 ```
-pd_reload <jobs|fortbildung|waffen|fraktionen|armor|spawns|all>
+pd_reload <jobs|fortbildung|waffen|arccw|fraktionen|armor|spawns|all>
 pd_status
 pd_assets_write
+pd_arccw_write
+pd_arccw_status [waffenklasse]
 pd_admin_say <text>
 pd_announce <Titel> | <Text> [| Sekunden]
 pd_admin_kick <steamid64> [grund]
@@ -123,6 +125,7 @@ Läuft mehr als ein Server auf derselben Datenbank, unterscheidet das ConVar
 | Jobs & Einheiten | Baum aus Unit, Untereinheit und Job; Export und Import |
 | Fortbildungen | Katalog und Inhaber |
 | Waffen & Gewichte | Kategorien, Gewichte, Tragelast, Rechner zum Durchspielen |
+| ArcCW-Schaden | Schaden, Reichweiten und Durchschlag der ArcCW-Waffen |
 | Spieler & Charaktere | Suche und Einsicht (nur lesend, siehe unten) |
 | Werkzeuge | Ausrüstungs-Prüfung, Sicherungen, Serverkonsole |
 | Änderungsprotokoll | Wer hat wann was geändert, mit Rücknahme |
@@ -139,6 +142,28 @@ Vor Import, Rücknahme und Zurückspielen legt das Panel automatisch eine Sicher
 des betroffenen Bereichs an. Die Dateien liegen im Ordner `backups/` neben der
 Anwendung und sind **nicht** im Repository. Bei einem Neuaufbau des Containers
 sind sie weg — wichtige Sicherungen also über die Oberfläche herunterladen.
+
+## ArcCW-Schaden
+
+ArcCW-Waffen bringen ihre Werte fest im Addon mit. Das Gamemode-Modul
+`modules/arccw` hält beim Start die Ausgangswerte jeder Waffe fest
+(`pd_arccw_stats`) und wendet die Abweichungen aus `pd_arccw_overrides` darauf
+an. Geändert wird nie das Addon selbst — ein Update der ArcCW-Pakete
+überschreibt deshalb keine Anpassung.
+
+Ein leeres Feld im Panel heißt „Ausgangswert behalten". Nur ausgefüllte Felder
+landen in der Datenbank, und ein Leeren stellt den Originalwert wieder her.
+
+Die Werte gehen auch an die Clients: den Schaden rechnet zwar der Server aus,
+aber ArcCW zeigt die Zahlen im Waffenmenü an, und die kämen sonst aus der
+unveränderten Addon-Datei.
+
+## Auswahllisten für Waffen und Models
+
+Überall, wo Waffenklassen oder Modelpfade einzutragen sind — Jobs, Untereinheiten,
+Fortbildungen —, gibt es eine durchsuchbare Liste dessen, was auf dem Server
+tatsächlich installiert ist. Quelle ist dieselbe Tabelle `pd_server_assets` wie
+für die Prüfung unten. Einträge, die es dort nicht gibt, werden rot markiert.
 
 ## Ausrüstungs-Prüfung
 

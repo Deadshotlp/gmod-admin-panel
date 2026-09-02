@@ -12,6 +12,7 @@ const NAV: Array<{ href: string; label: string }> = [
   { href: "/jobs", label: "Jobs & Einheiten" },
   { href: "/fortbildungen", label: "Fortbildungen" },
   { href: "/waffen", label: "Waffen & Gewichte" },
+  { href: "/arccw", label: "ArcCW-Schaden" },
   { href: "/spieler", label: "Spieler & Charaktere" },
   { href: "/werkzeuge", label: "Werkzeuge" },
   { href: "/audit", label: "Änderungsprotokoll" },

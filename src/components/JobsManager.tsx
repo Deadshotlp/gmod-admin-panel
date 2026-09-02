@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { PanelUser } from "@/lib/auth";
+import AssetPicker from "./AssetPicker";
 
 interface JobColor {
   r: number;
@@ -820,23 +821,21 @@ export default function JobsManager({ user }: { user: PanelUser }) {
                   <label className="card-label">
                     Playermodels (kommagetrennt, Pfade wie models/…/xyz.mdl)
                   </label>
-                  <textarea
+                  <AssetPicker
+                    kind="model"
                     value={String(field("model"))}
-                    onChange={(event) => setField("model", event.target.value)}
+                    onChange={(next) => setField("model", next)}
                     disabled={!canEdit}
-                    rows={3}
-                    style={{ ...inputStyle, fontFamily: "Consolas, monospace", fontSize: 13 }}
                   />
                 </>
               )}
 
               <label className="card-label">Ausrüstung (kommagetrennte Waffenklassen)</label>
-              <textarea
+              <AssetPicker
+                kind="weapon"
                 value={String(field("equip"))}
-                onChange={(event) => setField("equip", event.target.value)}
+                onChange={(next) => setField("equip", next)}
                 disabled={!canEdit}
-                rows={3}
-                style={{ ...inputStyle, fontFamily: "Consolas, monospace", fontSize: 13 }}
               />
 
               <label style={{ ...checkboxStyle, margin: "12px 0" }}>

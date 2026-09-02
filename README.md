@@ -157,6 +157,11 @@ In den Feldern steht der Wert, mit dem die Waffe gerade läuft — die eigene
 abweicht; ein Feld zu leeren stellt den Ausgangswert wieder her. Geänderte
 Felder sind blau umrandet.
 
+Weil die Waffen über 30 einstellbare Werte haben, zeigt die Tabelle nur eine
+Auswahl. Über „Spalten" lässt sie sich nach Gruppen zusammenstellen; die
+Auswahl bleibt im Browser gespeichert. Ausgeblendete Werte bleiben unangetastet
+— sie werden weder verworfen noch überschrieben.
+
 Drei Bereiche:
 
 | Bereich | Was |

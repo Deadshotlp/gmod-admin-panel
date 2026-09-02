@@ -134,6 +134,47 @@ function sheetFrom(
 /** Trefferzonen haben keinen Ausgangswert im Addon: 1 heißt unverändert. */
 const ZONE_DEFAULTS: Values = Object.fromEntries(ZONE_KEYS.map((key) => [key, 1]));
 
+/**
+ * Sichtbare Spalten.
+ *
+ * Alle 33 Waffenwerte nebeneinander sind unbrauchbar. Voreingestellt ist
+ * deshalb das, was man tatsächlich häufig anfasst; der Rest lässt sich
+ * dazuschalten. Die Auswahl liegt im Browser und gilt je Bereich.
+ */
+const DEFAULT_COLUMNS: Record<string, string[]> = {
+  weapons: ["damage", "damage_min", "range_min", "range", "rpm", "num"],
+  attachments: ["mult_damage", "mult_rpm", "mult_range", "mult_recoil"],
+};
+
+const COLUMN_STORAGE = "swrp:arccw:columns:v1";
+
+function loadColumns(): Record<string, string[]> {
+  try {
+    const raw = window.localStorage.getItem(COLUMN_STORAGE);
+    if (!raw) return DEFAULT_COLUMNS;
+
+    const parsed = JSON.parse(raw) as Record<string, string[]>;
+
+    return {
+      weapons: Array.isArray(parsed.weapons) ? parsed.weapons : DEFAULT_COLUMNS.weapons,
+      attachments: Array.isArray(parsed.attachments)
+        ? parsed.attachments
+        : DEFAULT_COLUMNS.attachments,
+    };
+  } catch {
+    // Privates Fenster, geleerte Seitendaten, blockierter Speicher.
+    return DEFAULT_COLUMNS;
+  }
+}
+
+function saveColumns(columns: Record<string, string[]>) {
+  try {
+    window.localStorage.setItem(COLUMN_STORAGE, JSON.stringify(columns));
+  } catch {
+    // Nicht speichern zu können ist kein Grund, die Auswahl zu verweigern.
+  }
+}
+
 export default function ArccwManager({ user }: { user: PanelUser }) {
   const canEdit = user.role !== "viewer";
 
@@ -143,6 +184,7 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
   const [attSheet, setAttSheet] = useState<Sheet>({});
   const [zoneSheet, setZoneSheet] = useState<Sheet>({});
   const [blocks, setBlocks] = useState<Record<string, string[]>>({});
+  const [columns, setColumns] = useState<Record<string, string[]>>(DEFAULT_COLUMNS);
   const [search, setSearch] = useState("");
   const [onlyChanged, setOnlyChanged] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
@@ -221,6 +263,28 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Erst nach dem ersten Rendern lesen: auf dem Server gibt es kein localStorage.
+  useEffect(() => {
+    setColumns(loadColumns());
+  }, []);
+
+  function chooseColumns(area: string, keys: string[]) {
+    const next = { ...columns, [area]: keys };
+
+    setColumns(next);
+    saveColumns(next);
+  }
+
+  const weaponColumns = useMemo(
+    () => WEAPON_FIELDS.filter((field) => columns.weapons.includes(field.key)),
+    [columns],
+  );
+
+  const attColumns = useMemo(
+    () => ATTACHMENT_FIELDS.filter((field) => columns.attachments.includes(field.key)),
+    [columns],
+  );
 
   const weapons = state?.weapons ?? [];
   const attachments = state?.attachments ?? [];
@@ -360,11 +424,29 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
             </button>
           )}
         </div>
+
+        {tab === "weapons" && (
+          <ColumnChooser
+            fields={WEAPON_FIELDS}
+            chosen={columns.weapons}
+            fallback={DEFAULT_COLUMNS.weapons}
+            onChange={(keys) => chooseColumns("weapons", keys)}
+          />
+        )}
+
+        {tab === "attachments" && (
+          <ColumnChooser
+            fields={ATTACHMENT_FIELDS}
+            chosen={columns.attachments}
+            fallback={DEFAULT_COLUMNS.attachments}
+            onChange={(keys) => chooseColumns("attachments", keys)}
+          />
+        )}
       </div>
 
       {tab === "weapons" && (
         <Grid
-          fields={WEAPON_FIELDS}
+          fields={weaponColumns}
           sheet={weaponSheet}
           setSheet={setWeaponSheet}
           canEdit={canEdit}
@@ -405,7 +487,7 @@ export default function ArccwManager({ user }: { user: PanelUser }) {
 
       {tab === "attachments" && (
         <Grid
-          fields={ATTACHMENT_FIELDS}
+          fields={attColumns}
           sheet={attSheet}
           setSheet={setAttSheet}
           canEdit={canEdit}
@@ -627,6 +709,130 @@ function BlockEditor({
           </>
         )}
       </div>
+    </div>
+  );
+}
+/**
+ * Welche Spalten in der Tabelle stehen.
+ *
+ * Nach Gruppen sortiert, weil man in der Praxis ganze Themen ein- und
+ * ausblendet — "jetzt Rückstoß", "jetzt Hitze" — und selten einzelne Werte.
+ */
+function ColumnChooser({
+  fields,
+  chosen,
+  fallback,
+  onChange,
+}: {
+  fields: FieldSpec[];
+  chosen: string[];
+  fallback: string[];
+  onChange: (keys: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const groups = useMemo(() => {
+    const map = new Map<string, FieldSpec[]>();
+
+    for (const field of fields) {
+      const list = map.get(field.group) ?? [];
+      list.push(field);
+      map.set(field.group, list);
+    }
+
+    return Array.from(map.entries());
+  }, [fields]);
+
+  function toggle(key: string) {
+    onChange(
+      chosen.includes(key) ? chosen.filter((entry) => entry !== key) : [...chosen, key],
+    );
+  }
+
+  function setGroup(group: string, on: boolean) {
+    const keys = fields.filter((field) => field.group === group).map((field) => field.key);
+
+    onChange(
+      on
+        ? Array.from(new Set([...chosen, ...keys]))
+        : chosen.filter((entry) => !keys.includes(entry)),
+    );
+  }
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button type="button" onClick={() => setOpen(!open)}>
+        Spalten ({chosen.length} von {fields.length})
+      </button>
+
+      {open && (
+        <div
+          style={{
+            marginTop: 8,
+            padding: 12,
+            border: "1px solid var(--border)",
+            borderRadius: 4,
+            background: "var(--bg-panel-light)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 14,
+          }}
+        >
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button type="button" onClick={() => onChange(fields.map((field) => field.key))}>
+              Alle
+            </button>
+            <button type="button" onClick={() => onChange(fallback)}>
+              Standardauswahl
+            </button>
+            <button type="button" onClick={() => onChange([])}>
+              Keine
+            </button>
+          </div>
+
+          {groups.map(([group, entries]) => {
+            const all = entries.every((field) => chosen.includes(field.key));
+
+            return (
+              <div key={group} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span className="card-label" style={{ margin: 0 }}>
+                    {group}
+                  </span>
+                  <button type="button" onClick={() => setGroup(group, !all)}>
+                    {all ? "abwählen" : "alle"}
+                  </button>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))",
+                    gap: 4,
+                  }}
+                >
+                  {entries.map((field) => (
+                    <label
+                      key={field.key}
+                      style={{ display: "flex", gap: 7, alignItems: "center", fontSize: 13 }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={chosen.includes(field.key)}
+                        onChange={() => toggle(field.key)}
+                      />
+                      {field.label}
+                      {field.unit && (
+                        <span style={{ color: "var(--text-muted)" }}>({field.unit})</span>
+                      )}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

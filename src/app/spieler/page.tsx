@@ -14,10 +14,11 @@ export default async function SpielerPage() {
     <Shell user={user} current="/spieler">
       <h1>Spieler &amp; Charaktere</h1>
       <p className="subtitle">
-        Charaktere durchsuchen, Zuordnung, Spielzeit und Fortbildungen einsehen.
+        Charaktere durchsuchen und bearbeiten: Name, Rang, Credits und Zuordnung.
+        Spielzeit und Fortbildungen einsehen.
       </p>
 
-      <SpielerManager />
+      <SpielerManager user={user} />
     </Shell>
   );
 }

@@ -42,6 +42,7 @@ const RELOAD_AREAS: Array<{ key: string; label: string }> = [
   { key: "fraktionen", label: "Fraktionsbaum" },
   { key: "armor", label: "Rüstungen" },
   { key: "spawns", label: "Spawnpunkte" },
+  { key: "chars", label: "Charaktere" },
   { key: "all", label: "Alles" },
 ];
 

@@ -281,6 +281,7 @@ export const RELOAD_AREAS = [
   "fraktionen",
   "armor",
   "spawns",
+  "chars",
   "all",
 ] as const;
 

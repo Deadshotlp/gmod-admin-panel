@@ -1,18 +1,31 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { AuthError, requireUser } from "@/lib/auth";
+import { writeAudit } from "@/lib/audit";
+import {
+  CharacterError,
+  deleteCharacter,
+  getCharacter,
+  saveCharacter,
+} from "@/lib/charactersDb";
 import { query } from "@/lib/db";
+import { reloadServer } from "@/lib/pterodactyl";
+import { checkRateLimit, rateLimitKey } from "@/lib/rateLimit";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Charakterübersicht.
+ * Charaktere einsehen und bearbeiten.
  *
- * Bewusst nur lesend. Die Zuordnung zu einer Einheit lebt an zwei Orten: in den
- * Spalten faction_* von pd_characters UND in data/factions/players.json, aus der
- * PD.List seinen Fraktionsbaum baut. Zusätzlich schreibt PD.Char:SaveChar beim
- * Verlassen alle Zeilen einer SteamID neu - eine Änderung von hier würde dabei
- * überschrieben. Schreiben wird erst möglich, wenn die Mitgliedschaften nach SQL
- * gewandert sind.
+ * Die Einheitenzuordnung steht nur noch in `pd_characters` - der Gamemode baut
+ * seinen Fraktionsbaum daraus, die frühere `data/factions/players.json` gibt es
+ * nicht mehr. Nach jeder Änderung lädt der Server die Charaktere mit
+ * `pd_reload chars` neu und setzt verbundene Spieler sofort um.
+ *
+ * Eine Lücke bleibt: speichert der Server einen verbundenen Spieler genau
+ * zwischen dem Schreiben hier und dem Nachladen (Verlassen, Geldbuchung),
+ * gewinnt dessen Stand. Das Fenster ist so kurz wie der Weg über die
+ * Serverkonsole.
  */
 
 interface CharacterRow {
@@ -30,16 +43,20 @@ interface CharacterRow {
   job_name: string;
 }
 
+function failed(error: unknown) {
+  if (error instanceof AuthError) {
+    return NextResponse.json({ error: error.message }, { status: error.status });
+  }
+
+  console.error("[spieler] Fehler:", error);
+  return NextResponse.json({ error: "Datenbank nicht erreichbar" }, { status: 503 });
+}
+
 export async function GET(request: Request) {
   try {
     await requireUser("viewer");
   } catch (error) {
-    if (error instanceof AuthError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
-    }
-
-    console.error("[spieler] Fehler:", error);
-    return NextResponse.json({ error: "Datenbank nicht erreichbar" }, { status: 503 });
+    return failed(error);
   }
 
   const params = new URL(request.url).searchParams;
@@ -111,6 +128,122 @@ export async function GET(request: Request) {
     return NextResponse.json(
       { error: "Abfrage fehlgeschlagen", detail: (error as Error).message },
       { status: 503 },
+    );
+  }
+}
+
+const steamId = z.string().regex(/^\d{17}$/, "Ungültige SteamID64");
+const charId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "Ungültige Kennung");
+const factionKey = z.string().min(1).max(128);
+
+const body = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("save"),
+    steamId,
+    charId,
+    input: z.object({
+      name: z.string().trim().min(1, "Name fehlt").max(64),
+      rank: z.string().trim().max(128),
+      money: z.number().int().min(0).max(2_147_483_647),
+      unitKey: factionKey,
+      subunitKey: factionKey,
+      jobKey: factionKey,
+    }),
+  }),
+  z.object({ action: z.literal("delete"), steamId, charId }),
+]);
+
+export async function POST(request: Request) {
+  let user;
+
+  try {
+    user = await requireUser("editor");
+  } catch (error) {
+    return failed(error);
+  }
+
+  if (!checkRateLimit(rateLimitKey(request, "spieler-write"), 60, 60_000)) {
+    return NextResponse.json({ error: "Zu viele Änderungen" }, { status: 429 });
+  }
+
+  let raw: unknown;
+
+  try {
+    raw = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Ungültige Anfrage" }, { status: 400 });
+  }
+
+  const parsed = body.safeParse(raw);
+
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Ungültige Eingabe", detail: parsed.error.issues },
+      { status: 400 },
+    );
+  }
+
+  const data = parsed.data;
+  const targetKey = `${data.steamId}/${data.charId}`;
+
+  try {
+    const before = await getCharacter(data.steamId, data.charId);
+
+    if (!before) {
+      return NextResponse.json({ error: "Charakter nicht gefunden" }, { status: 404 });
+    }
+
+    if (data.action === "save") {
+      const after = await saveCharacter(data.steamId, data.charId, data.input);
+
+      await writeAudit({
+        user,
+        action: "spieler.save",
+        targetType: "character",
+        targetKey,
+        before,
+        after,
+      });
+
+      // Gespeichert ist gespeichert - das Nachladen ist ein eigener Schritt.
+      const reload = await reloadServer("chars");
+
+      return NextResponse.json({
+        ok: true,
+        character: after,
+        reload: { ok: reload.ok, message: reload.message },
+      });
+    }
+
+    await deleteCharacter(data.steamId, data.charId);
+
+    await writeAudit({
+      user,
+      action: "spieler.delete",
+      targetType: "character",
+      targetKey,
+      before,
+      after: null,
+    });
+
+    // Die Fortbildungen des Charakters sind mit gelöscht - beide Bereiche neu laden.
+    const reload = await reloadServer("chars");
+    await reloadServer("fortbildung");
+
+    return NextResponse.json({
+      ok: true,
+      reload: { ok: reload.ok, message: reload.message },
+    });
+  } catch (error) {
+    if (error instanceof CharacterError) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
+
+    console.error("[spieler] Schreiben fehlgeschlagen:", error);
+
+    return NextResponse.json(
+      { error: "Änderung fehlgeschlagen", detail: (error as Error).message },
+      { status: 500 },
     );
   }
 }

@@ -100,7 +100,7 @@ legt die Tabellen `pd_server_status` und `pd_online_players` an, schreibt alle 1
 Sekunden einen Heartbeat und stellt diese Konsolenbefehle bereit:
 
 ```
-pd_reload <jobs|fortbildung|waffen|arccw|fraktionen|armor|spawns|all>
+pd_reload <jobs|fortbildung|waffen|arccw|fraktionen|armor|spawns|chars|all>
 pd_status
 pd_assets_write
 pd_arccw_write
@@ -127,15 +127,33 @@ Läuft mehr als ein Server auf derselben Datenbank, unterscheidet das ConVar
 | Fortbildungen | Katalog und Inhaber |
 | Waffen & Gewichte | Kategorien, Gewichte, Tragelast, Rechner zum Durchspielen |
 | ArcCW-Schaden | Waffenwerte, Trefferzonen und Aufsätze der ArcCW-Waffen |
-| Spieler & Charaktere | Suche und Einsicht (nur lesend, siehe unten) |
+| Spieler & Charaktere | Suche, Name, Rang, Credits und Zuordnung bearbeiten, Charakter löschen |
 | Werkzeuge | Ausrüstungs-Prüfung, Sicherungen, Serverkonsole |
 | Änderungsprotokoll | Wer hat wann was geändert, mit Rücknahme |
 | Panel-Benutzer | Rollen vergeben |
 
-**Spieler & Charaktere ist bewusst nur lesend.** Die Einheitenzuordnung liegt
-gleichzeitig in `pd_characters` und in `data/factions/players.json`, und der
-Gamemode schreibt beim Verlassen eines Spielers dessen Zeilen komplett neu — eine
-Änderung von hier würde dabei überschrieben.
+## Spieler & Charaktere
+
+Die Einheitenzuordnung steht nur noch in `pd_characters`. Der Gamemode baut
+seinen Fraktionsbaum aus den Spalten `faction_*`, die frühere
+`data/factions/players.json` liest er nicht mehr. Charaktere lädt er
+ausschließlich aus der Datenbank.
+
+Bearbeiten dürfen `editor` und `admin`. Nach dem Speichern schickt das Panel
+`pd_reload chars`: der Server lädt die Charaktere neu, verbundene Spieler bekommen
+Name und Zuordnung sofort, ein gelöschter aktiver Charakter öffnet bei ihnen das
+Charaktermenü. Beim Löschen gehen auch die Fortbildungen des Charakters weg (wie
+im Spiel), deshalb folgt zusätzlich `pd_reload fortbildung`.
+
+Die Kennung (`char_id`) ist nicht editierbar - an ihr hängen Fortbildungen und
+der Fraktionsbaum. `job_*` wird aus dem gewählten Job abgeleitet, nicht frei
+gesetzt.
+
+Eine Lücke bleibt: speichert der Server einen verbundenen Spieler genau zwischen
+dem Schreiben im Panel und dem Nachladen (Verlassen, Geldbuchung), gewinnt dessen
+Stand. Das Fenster ist so kurz wie der Weg über die Serverkonsole. Erreicht das
+Panel den Server gar nicht, meldet es das - dann greift die Änderung erst nach
+einem Neustart.
 
 ## Sicherungen
 

@@ -23,6 +23,8 @@ export const BACKUP_SCOPES = {
   waffen: ["pd_wb_config", "pd_wb_categories", "pd_wb_weapons", "pd_wb_always"],
   fahrzeuge: ["pd_vehinv_vehicles", "pd_vehinv_cargo"],
   kisten: ["pd_kiste_packables"],
+  funk: ["pd_comlink_channels", "pd_voice_ranges"],
+  charakter: ["pd_char_config"],
 } as const;
 
 export type BackupScope = keyof typeof BACKUP_SCOPES;

@@ -36,6 +36,12 @@ const schema = z.discriminatedUnion("action", [
     level: z.number().int().min(0).max(5),
     text: z.string().max(150).optional(),
   }),
+  z.object({
+    action: z.literal("announce"),
+    title: z.string().max(80).optional(),
+    text: z.string().min(1).max(300),
+    duration: z.number().int().min(3).max(120).optional(),
+  }),
 ]);
 
 /** Zeilenumbrüche und Anführungszeichen raus - sonst bricht der Befehl auf. */
@@ -81,7 +87,10 @@ export async function POST(request: Request) {
 
   // Eingriffe am laufenden Server sind Adminsache, reines Nachladen nicht.
   const needsAdmin =
-    input.action === "say" || input.action === "kick" || input.action === "defcon";
+    input.action === "say" ||
+    input.action === "kick" ||
+    input.action === "defcon" ||
+    input.action === "announce";
 
   if (needsAdmin) {
     try {
@@ -109,6 +118,11 @@ export async function POST(request: Request) {
       break;
     case "kick":
       command = `pd_admin_kick ${input.steamId} ${clean(input.reason ?? "Kein Grund angegeben")}`;
+      break;
+    case "announce":
+      // Titel | Text | Sekunden, wie pd_announce es erwartet.
+      // Ein | im Text würde die Felder verschieben - durch / ersetzen.
+      command = `pd_announce ${clean(input.title || "Serverleitung").replace(/\|/g, "/")} | ${clean(input.text).replace(/\|/g, "/")} | ${input.duration ?? 10}`;
       break;
     case "defcon":
       command = `pd_defcon ${input.level} ${clean(input.text ?? "")}`.trim();

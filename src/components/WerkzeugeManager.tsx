@@ -35,6 +35,8 @@ const SCOPE_LABEL: Record<string, string> = {
   waffen: "Waffen & Gewichte",
   fahrzeuge: "Fahrzeuginventar",
   kisten: "Transportkisten",
+  funk: "Funk & Sprachreichweiten",
+  charakter: "Charakter-Einstellungen",
 };
 
 function formatSize(bytes: number): string {
@@ -54,7 +56,10 @@ export default function WerkzeugeManager({ user }: { user: PanelUser }) {
   // Konsole
   const [consoleLines, setConsoleLines] = useState<string[]>([]);
   const [consoleState, setConsoleState] = useState<"aus" | "verbinde" | "an" | "fehler">("aus");
-  const socketRef = useRef<WebSocket | null>(null);
+  const socketRef = useRef<EventSource | null>(null);
+  const [consoleError, setConsoleError] = useState<string | null>(null);
+  const [command, setCommand] = useState("");
+  const [sending, setSending] = useState(false);
   const consoleEndRef = useRef<HTMLDivElement | null>(null);
 
   const loadCheck = useCallback(async () => {
@@ -131,7 +136,12 @@ export default function WerkzeugeManager({ user }: { user: PanelUser }) {
     }
   };
 
-  const connectConsole = async () => {
+  /*
+   * Die Konsole läuft über /api/server/console/stream (Server-Sent Events):
+   * der Panel-Server hält die Verbindung zu Wings. Direkt aus dem Browser
+   * lehnte Wings sie wegen des fremden Origin ab.
+   */
+  const connectConsole = () => {
     if (socketRef.current) {
       socketRef.current.close();
       socketRef.current = null;
@@ -140,71 +150,69 @@ export default function WerkzeugeManager({ user }: { user: PanelUser }) {
     }
 
     setConsoleState("verbinde");
+    setConsoleError(null);
     setConsoleLines([]);
 
-    try {
-      const response = await fetchWithTimeout("/api/server/console", { cache: "no-store" });
-      const { data, error } = await readJson<{ socket: string; token: string }>(response);
+    const source = new EventSource("/api/server/console/stream");
+    socketRef.current = source;
 
-      if (error || !data) {
-        setConsoleState("fehler");
-        setMessage({ ok: false, text: error ?? "Keine Konsolenverbindung möglich" });
+    source.addEventListener("status", (event) => {
+      const state = JSON.parse((event as MessageEvent).data as string) as string;
+      if (state === "an") setConsoleState("an");
+    });
+
+    source.addEventListener("lines", (event) => {
+      const lines = JSON.parse((event as MessageEvent).data as string) as string[];
+
+      // Nach oben begrenzen, sonst wächst die Seite endlos
+      setConsoleLines((previous) => [...previous, ...lines].slice(-500));
+    });
+
+    source.addEventListener("failure", (event) => {
+      const text = JSON.parse((event as MessageEvent).data as string) as string;
+
+      setConsoleError(text);
+      setConsoleState("fehler");
+      source.close();
+      socketRef.current = null;
+    });
+
+    // Netzfehler oder Abbruch: nicht endlos neu verbinden lassen.
+    source.onerror = () => {
+      if (socketRef.current !== source) return;
+
+      source.close();
+      socketRef.current = null;
+      setConsoleState((previous) => (previous === "an" ? "aus" : "fehler"));
+    };
+  };
+
+  const sendCommand = async () => {
+    const text = command.trim();
+    if (text === "") return;
+
+    setSending(true);
+
+    try {
+      const response = await fetchWithTimeout("/api/server/console", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: text }),
+      });
+
+      const { error } = await readJson<{ ok: boolean }>(response);
+
+      if (error) {
+        setConsoleError(error);
         return;
       }
 
-      const socket = new WebSocket(data.socket);
-      socketRef.current = socket;
-
-      socket.onopen = () => {
-        socket.send(JSON.stringify({ event: "auth", args: [data.token] }));
-      };
-
-      socket.onmessage = (event) => {
-        try {
-          const payload = JSON.parse(event.data as string) as {
-            event: string;
-            args?: string[];
-          };
-
-          if (payload.event === "auth success") {
-            setConsoleState("an");
-            // Bisherige Ausgabe nachreichen, sonst startet man im Leeren
-            socket.send(JSON.stringify({ event: "send logs", args: [null] }));
-            return;
-          }
-
-          if (payload.event === "console output" && payload.args) {
-            setConsoleLines((previous) => {
-              // Nach oben begrenzen, sonst wächst die Seite endlos
-              const next = [...previous, ...payload.args!];
-              return next.slice(-500);
-            });
-          }
-
-          if (payload.event === "token expiring" || payload.event === "token expired") {
-            // Token läuft nach 10 Minuten ab - neues holen und weitermachen
-            void fetchWithTimeout("/api/server/console", { cache: "no-store" })
-              .then((res) => readJson<{ token: string }>(res))
-              .then(({ data: fresh }) => {
-                if (fresh?.token) {
-                  socket.send(JSON.stringify({ event: "auth", args: [fresh.token] }));
-                }
-              })
-              .catch(() => undefined);
-          }
-        } catch {
-          // Unverständliche Nachricht überspringen
-        }
-      };
-
-      socket.onerror = () => setConsoleState("fehler");
-
-      socket.onclose = () => {
-        socketRef.current = null;
-        setConsoleState((previous) => (previous === "an" ? "aus" : previous));
-      };
+      setConsoleError(null);
+      setCommand("");
     } catch {
-      setConsoleState("fehler");
+      setConsoleError("Befehl konnte nicht gesendet werden");
+    } finally {
+      setSending(false);
     }
   };
 
@@ -365,8 +373,8 @@ export default function WerkzeugeManager({ user }: { user: PanelUser }) {
           <h2>Serverkonsole</h2>
           <div className="panel">
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-              <button onClick={() => void connectConsole()}>
-                {socketRef.current ? "Trennen" : "Verbinden"}
+              <button onClick={() => connectConsole()}>
+                {consoleState === "an" || consoleState === "verbinde" ? "Trennen" : "Verbinden"}
               </button>
 
               <span className="subtitle" style={{ margin: 0 }}>
@@ -409,9 +417,35 @@ export default function WerkzeugeManager({ user }: { user: PanelUser }) {
               <div ref={consoleEndRef} />
             </div>
 
+            {consoleError && (
+              <div className="notice error" style={{ marginTop: 10, marginBottom: 0 }}>
+                {consoleError}
+              </div>
+            )}
+
+            <form
+              style={{ display: "flex", gap: 8, marginTop: 10 }}
+              onSubmit={(event) => {
+                event.preventDefault();
+                void sendCommand();
+              }}
+            >
+              <input
+                className="mono"
+                value={command}
+                onChange={(event) => setCommand(event.target.value)}
+                placeholder="Konsolenbefehl, z. B. pd_status"
+                maxLength={300}
+                disabled={sending}
+                style={{ ...inputStyle, flex: 1 }}
+              />
+              <button type="submit" disabled={sending || command.trim() === ""}>
+                Senden
+              </button>
+            </form>
+
             <p className="subtitle" style={{ marginBottom: 0, marginTop: 10 }}>
-              Nur Mitlesen. Befehle laufen weiterhin über die Übersichtsseite, damit
-              jede Aktion im Protokoll landet.
+              Jeder Befehl landet mit deinem Namen im Änderungsprotokoll.
             </p>
           </div>
         </>

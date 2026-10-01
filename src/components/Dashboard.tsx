@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { PanelUser } from "@/lib/auth";
+import LiveActions from "./LiveActions";
 
 interface ServerStatus {
   online: boolean;
@@ -45,6 +46,8 @@ const RELOAD_AREAS: Array<{ key: string; label: string }> = [
   { key: "chars", label: "Charaktere" },
   { key: "fahrzeuge", label: "Fahrzeuginventar" },
   { key: "kisten", label: "Transportkisten" },
+  { key: "funk", label: "Funk & Sprachreichweiten" },
+  { key: "charakter", label: "Charakter-Einstellungen" },
   { key: "all", label: "Alles" },
 ];
 
@@ -292,6 +295,10 @@ export default function Dashboard({ user }: { user: PanelUser }) {
           </p>
         )}
       </div>
+
+      {user.role === "admin" && (
+        <LiveActions players={data?.players ?? []} currentDefcon={status?.defcon} />
+      )}
 
       <h2>Spieler online</h2>
       <div className="panel">

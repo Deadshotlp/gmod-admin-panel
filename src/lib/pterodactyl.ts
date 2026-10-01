@@ -284,6 +284,8 @@ export const RELOAD_AREAS = [
   "chars",
   "fahrzeuge",
   "kisten",
+  "funk",
+  "charakter",
   "all",
 ] as const;
 

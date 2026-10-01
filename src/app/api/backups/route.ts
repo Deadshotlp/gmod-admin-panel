@@ -56,7 +56,7 @@ export async function GET(request: Request) {
 const schema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("create"),
-    scope: z.enum(["jobs", "fortbildung", "waffen", "fahrzeuge", "kisten"]),
+    scope: z.enum(["jobs", "fortbildung", "waffen", "fahrzeuge", "kisten", "funk", "charakter"]),
     reason: z.string().max(200).optional(),
   }),
   z.object({ action: z.literal("restore"), file: z.string().min(1).max(190) }),

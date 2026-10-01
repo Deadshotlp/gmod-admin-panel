@@ -43,6 +43,8 @@ const RELOAD_AREAS: Array<{ key: string; label: string }> = [
   { key: "armor", label: "Rüstungen" },
   { key: "spawns", label: "Spawnpunkte" },
   { key: "chars", label: "Charaktere" },
+  { key: "fahrzeuge", label: "Fahrzeuginventar" },
+  { key: "kisten", label: "Transportkisten" },
   { key: "all", label: "Alles" },
 ];
 

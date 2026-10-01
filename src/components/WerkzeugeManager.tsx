@@ -33,6 +33,8 @@ const SCOPE_LABEL: Record<string, string> = {
   jobs: "Jobs & Einheiten",
   fortbildung: "Fortbildungen",
   waffen: "Waffen & Gewichte",
+  fahrzeuge: "Fahrzeuginventar",
+  kisten: "Transportkisten",
 };
 
 function formatSize(bytes: number): string {

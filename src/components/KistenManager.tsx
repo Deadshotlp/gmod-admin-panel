@@ -4,6 +4,12 @@ import { useCallback, useEffect, useState } from "react";
 import type { PanelUser } from "@/lib/auth";
 import { Notice, fetchWithTimeout, inputStyle, readJson } from "./ui";
 
+interface Spawnable {
+  model: string;
+  name: string;
+  limit: number;
+}
+
 interface Packable {
   model: string;
   name: string;
@@ -13,6 +19,7 @@ interface Packable {
 
 export default function KistenManager({ user }: { user: PanelUser }) {
   const [packables, setPackables] = useState<Packable[] | null>(null);
+  const [spawnables, setSpawnables] = useState<Spawnable[]>([]);
   const [configured, setConfigured] = useState(true);
   const [hint, setHint] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -28,6 +35,7 @@ export default function KistenManager({ user }: { user: PanelUser }) {
         configured: boolean;
         hint?: string;
         packables?: Packable[];
+        spawnables?: Spawnable[];
       }>(response);
 
       if (error) {
@@ -38,6 +46,7 @@ export default function KistenManager({ user }: { user: PanelUser }) {
       setConfigured(data?.configured ?? true);
       setHint(data?.hint ?? null);
       if (data?.packables) setPackables(data.packables);
+      if (data?.spawnables) setSpawnables(data.spawnables);
     } catch {
       setMessage({ ok: false, text: "Liste konnte nicht geladen werden" });
     } finally {
@@ -59,11 +68,12 @@ export default function KistenManager({ user }: { user: PanelUser }) {
       const response = await fetchWithTimeout("/api/kisten", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ packables }),
+        body: JSON.stringify({ packables, spawnables }),
       });
 
       const { data, error } = await readJson<{
         packables?: Packable[];
+        spawnables?: Spawnable[];
         reload?: { ok: boolean; message: string };
       }>(response);
 
@@ -73,6 +83,7 @@ export default function KistenManager({ user }: { user: PanelUser }) {
       }
 
       if (data?.packables) setPackables(data.packables);
+      if (data?.spawnables) setSpawnables(data.spawnables);
 
       setMessage({
         ok: Boolean(data?.reload?.ok),
@@ -202,6 +213,124 @@ export default function KistenManager({ user }: { user: PanelUser }) {
             }
           >
             + Objekt
+          </button>
+        )}
+      </div>
+
+      <h2>Kistenlager</h2>
+      <div className="panel" style={{ marginBottom: 22 }}>
+        <p className="subtitle" style={{ marginTop: 0 }}>
+          Was Spieler am Entity <span className="mono">Kistenlager</span> (Spawnmenü →
+          PD - Gamemode) als fertig gepackte Kiste holen können, z. B. Barrikaden.{" "}
+          <b>Limit</b> zählt gepackte und aufgebaute Objekte pro Spieler, 0 = unbegrenzt.
+          Steht das Modell auch oben in der Packliste, gelten dort Name, Packzeit und
+          Kistenmodell, und aufgebaute Objekte lassen sich wieder einpacken und am Lager
+          zurückgeben.
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Modell</th>
+              <th style={{ width: 200 }}>Anzeigename</th>
+              <th style={{ width: 110 }}>Limit</th>
+              <th style={{ width: 100 }} />
+            </tr>
+          </thead>
+          <tbody>
+            {spawnables.map((entry, index) => {
+              const packable = packables.some((item) => item.model === entry.model);
+
+              return (
+                <tr key={index}>
+                  <td>
+                    <input
+                      className="mono"
+                      list="kisten-packables"
+                      value={entry.model}
+                      disabled={!canEdit}
+                      placeholder="models/…/barrikade.mdl"
+                      onChange={(event) =>
+                        setSpawnables(
+                          spawnables.map((item, i) =>
+                            i === index ? { ...item, model: event.target.value } : item,
+                          ),
+                        )
+                      }
+                      style={inputStyle}
+                    />
+                    {entry.model !== "" && !packable && (
+                      <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+                        Nicht in der Packliste - lässt sich aufbauen, aber nicht wieder einpacken.
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    <input
+                      value={entry.name}
+                      disabled={!canEdit}
+                      placeholder="aus der Packliste"
+                      onChange={(event) =>
+                        setSpawnables(
+                          spawnables.map((item, i) =>
+                            i === index ? { ...item, name: event.target.value } : item,
+                          ),
+                        )
+                      }
+                      style={inputStyle}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      type="number"
+                      min={0}
+                      max={50}
+                      value={entry.limit}
+                      disabled={!canEdit}
+                      onChange={(event) =>
+                        setSpawnables(
+                          spawnables.map((item, i) =>
+                            i === index
+                              ? { ...item, limit: Math.max(0, Math.round(Number(event.target.value) || 0)) }
+                              : item,
+                          ),
+                        )
+                      }
+                      style={inputStyle}
+                    />
+                  </td>
+                  <td>
+                    {canEdit && (
+                      <button
+                        style={{ padding: "4px 10px", fontSize: 13 }}
+                        onClick={() => setSpawnables(spawnables.filter((_, i) => i !== index))}
+                      >
+                        Entfernen
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+
+        <datalist id="kisten-packables">
+          {packables.map((item) => (
+            <option key={item.model} value={item.model}>
+              {item.name}
+            </option>
+          ))}
+        </datalist>
+
+        {spawnables.length === 0 && <p className="subtitle">Das Lager ist leer.</p>}
+
+        {canEdit && (
+          <button
+            style={{ marginTop: 12 }}
+            onClick={() => setSpawnables([...spawnables, { model: "", name: "", limit: 3 }])}
+          >
+            + Lager-Eintrag
           </button>
         )}
       </div>

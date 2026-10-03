@@ -22,7 +22,7 @@ export const BACKUP_SCOPES = {
   fortbildung: ["pd_fb_courses", "pd_fb_granted"],
   waffen: ["pd_wb_config", "pd_wb_categories", "pd_wb_weapons", "pd_wb_always"],
   fahrzeuge: ["pd_vehinv_vehicles", "pd_vehinv_cargo"],
-  kisten: ["pd_kiste_packables"],
+  kisten: ["pd_kiste_packables", "pd_kiste_spawnables"],
   funk: ["pd_comlink_channels", "pd_voice_ranges"],
   charakter: ["pd_char_config"],
 } as const;

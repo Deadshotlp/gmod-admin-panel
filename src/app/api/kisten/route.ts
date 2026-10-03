@@ -48,6 +48,29 @@ async function loadPackables(): Promise<Packable[]> {
   }));
 }
 
+interface Spawnable {
+  model: string;
+  name: string;
+  limit: number;
+}
+
+/** Sortiment des Kistenlagers. Fehlt die Tabelle (älterer Gamemode), leer. */
+async function loadSpawnables(): Promise<Spawnable[]> {
+  try {
+    const rows = await query<{ model: string; name: string; max_per_player: number }>(
+      "SELECT * FROM `pd_kiste_spawnables` ORDER BY `position`, `model`",
+    );
+
+    return rows.map((row) => ({
+      model: row.model,
+      name: row.name,
+      limit: Number(row.max_per_player),
+    }));
+  } catch {
+    return [];
+  }
+}
+
 // Modellpfade wie im Spiel: models/....mdl, nur unbedenkliche Zeichen.
 const modelPath = z
   .string()
@@ -69,6 +92,16 @@ const schema = z.object({
       }),
     )
     .max(300),
+  spawnables: z
+    .array(
+      z.object({
+        model: modelPath,
+        name: z.string().trim().max(64),
+        limit: z.number().int().min(0).max(50),
+      }),
+    )
+    .max(100)
+    .default([]),
 });
 
 function fail(error: unknown) {
@@ -96,7 +129,11 @@ export async function GET() {
       });
     }
 
-    return NextResponse.json({ configured: true, packables: await loadPackables() });
+    return NextResponse.json({
+      configured: true,
+      packables: await loadPackables(),
+      spawnables: await loadSpawnables(),
+    });
   } catch (error) {
     return fail(error);
   }
@@ -148,8 +185,19 @@ export async function POST(request: Request) {
     seen.add(entry.model);
   }
 
+  const seenSpawn = new Set<string>();
+  for (const entry of input.spawnables) {
+    if (seenSpawn.has(entry.model)) {
+      return NextResponse.json(
+        { error: `Lager: Modell doppelt eingetragen: ${entry.model}` },
+        { status: 400 },
+      );
+    }
+    seenSpawn.add(entry.model);
+  }
+
   try {
-    const before = await loadPackables();
+    const before = { packables: await loadPackables(), spawnables: await loadSpawnables() };
 
     await createBackup("kisten", `Automatisch vor dem Speichern durch ${user.displayName}`);
 
@@ -162,15 +210,26 @@ export async function POST(request: Request) {
           [entry.model, entry.name, entry.packTime, entry.crateModel, index + 1],
         );
       }
+
+      // Lager-Sortiment. Die Tabelle legt der Gamemode an; fehlt sie noch,
+      // bricht das Speichern hier mit einer klaren Meldung ab.
+      await conn.execute("DELETE FROM `pd_kiste_spawnables`");
+
+      for (const [index, entry] of input.spawnables.entries()) {
+        await conn.execute(
+          "INSERT INTO `pd_kiste_spawnables` (`model`, `name`, `max_per_player`, `position`) VALUES (?, ?, ?, ?)",
+          [entry.model, entry.name, entry.limit, index + 1],
+        );
+      }
     });
 
-    const after = await loadPackables();
+    const after = { packables: await loadPackables(), spawnables: await loadSpawnables() };
 
     await writeAudit({
       user,
       action: "crates.save",
       targetType: "transportkisten",
-      targetKey: "packables",
+      targetKey: "config",
       before,
       after,
     });
@@ -179,7 +238,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       ok: true,
-      packables: after,
+      packables: after.packables,
+      spawnables: after.spawnables,
       reload: { ok: reload.ok, message: reload.message },
     });
   } catch (error) {

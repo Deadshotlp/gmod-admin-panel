@@ -70,6 +70,18 @@ a:hover {
   font-size: 12px;
 }
 
+.nav-group {
+  margin-bottom: 6px;
+}
+
+.nav-group-title {
+  padding: 10px 20px 4px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
 .nav-item {
   display: block;
   padding: 9px 20px;

@@ -7,22 +7,47 @@ import ServerSwitcher from "./ServerSwitcher";
  * Rahmen mit Seitenleiste.
  */
 
-const NAV: Array<{ href: string; label: string }> = [
-  { href: "/", label: "Übersicht" },
-  { href: "/jobs", label: "Jobs & Einheiten" },
-  { href: "/fortbildungen", label: "Fortbildungen" },
-  { href: "/waffen", label: "Waffen & Gewichte" },
-  { href: "/fahrzeuge", label: "Fahrzeuginventar" },
-  { href: "/kisten", label: "Transportkisten" },
-  { href: "/funk", label: "Funk" },
-  { href: "/charakter", label: "Charakter-Einstellungen" },
-  { href: "/raumflotte", label: "Raumflotte" },
-  { href: "/logs", label: "Admin-Logs" },
-  { href: "/arccw", label: "ArcCW-Schaden" },
-  { href: "/spieler", label: "Spieler & Charaktere" },
-  { href: "/werkzeuge", label: "Werkzeuge" },
-  { href: "/audit", label: "Änderungsprotokoll" },
-  { href: "/benutzer", label: "Panel-Benutzer" },
+/** Seitenleiste in Gruppen; Reihenfolge = Häufigkeit der Nutzung. */
+const NAV: Array<{ group?: string; items: Array<{ href: string; label: string }> }> = [
+  { items: [{ href: "/", label: "Übersicht" }] },
+  {
+    group: "Spieler",
+    items: [
+      { href: "/spieler", label: "Spieler & Charaktere" },
+      { href: "/jobs", label: "Jobs & Einheiten" },
+      { href: "/fortbildungen", label: "Fortbildungen" },
+      { href: "/charakter", label: "Charakter-Einstellungen" },
+    ],
+  },
+  {
+    group: "Raumflotte",
+    items: [
+      { href: "/flotte", label: "Flottenkommando" },
+      { href: "/raumflotte", label: "Raumflotte: Konfiguration" },
+    ],
+  },
+  {
+    group: "Ausrüstung & Fahrzeuge",
+    items: [
+      { href: "/waffen", label: "Waffen & Gewichte" },
+      { href: "/arccw", label: "ArcCW-Schaden" },
+      { href: "/fahrzeuge", label: "Fahrzeuginventar" },
+      { href: "/kisten", label: "Transportkisten" },
+    ],
+  },
+  {
+    group: "Kommunikation",
+    items: [{ href: "/funk", label: "Funk" }],
+  },
+  {
+    group: "Verwaltung",
+    items: [
+      { href: "/logs", label: "Admin-Logs" },
+      { href: "/audit", label: "Änderungsprotokoll" },
+      { href: "/werkzeuge", label: "Werkzeuge & Sicherungen" },
+      { href: "/benutzer", label: "Panel-Benutzer" },
+    ],
+  },
 ];
 
 const ROLE_LABEL: Record<string, string> = {
@@ -63,14 +88,19 @@ export default async function Shell({
 
         <ServerSwitcher servers={servers} activeId={activeId} />
 
-        {NAV.map((item) => (
-          <Link
-            key={item.href}
-            href={item.href}
-            className={`nav-item${current === item.href ? " active" : ""}`}
-          >
-            {item.label}
-          </Link>
+        {NAV.map((section, index) => (
+          <div key={section.group ?? index} className="nav-group">
+            {section.group && <div className="nav-group-title">{section.group}</div>}
+            {section.items.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`nav-item${current === item.href ? " active" : ""}`}
+              >
+                {item.label}
+              </Link>
+            ))}
+          </div>
         ))}
 
         <div className="sidebar-foot">

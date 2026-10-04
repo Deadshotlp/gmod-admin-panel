@@ -924,8 +924,8 @@ function RuntimeTab({ data, onReload }: { data: Data; onReload: () => void }) {
       <h2>Schiffe</h2>
       <div className="panel" style={{ marginBottom: 22 }}>
         <p className="subtitle" style={{ marginTop: 0 }}>
-          Stand der letzten Speicherung des Servers (alle 60 s). Schiffe erzeugen und befehligen: im Spiel im
-          Admin-Menü unter <b>Raumflotte</b>.
+          Stand der letzten Speicherung des Servers (alle 60 s). Schiffe erzeugen und befehligen: Seite <a href="/flotte">Flottenkommando</a> oder im Spiel im
+          Flottenkommando.
         </p>
         <table>
           <thead>

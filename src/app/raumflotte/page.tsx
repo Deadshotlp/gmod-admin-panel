@@ -12,7 +12,7 @@ export default async function RaumflottePage() {
 
   return (
     <Shell user={user} current="/raumflotte">
-      <h1>Raumflotte</h1>
+      <h1>Raumflotte: Konfiguration</h1>
       <p className="subtitle">
         Naval-System: Tempo und Regeln, Schiffsklassen, Fraktionen mit Beziehungen und die Galaxie. Schiffe im
         Spiel steuert man über das Admin-Menü unter Raumflotte.

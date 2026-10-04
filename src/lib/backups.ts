@@ -25,6 +25,7 @@ export const BACKUP_SCOPES = {
   kisten: ["pd_kiste_packables", "pd_kiste_spawnables"],
   funk: ["pd_comlink_channels", "pd_voice_ranges"],
   charakter: ["pd_char_config"],
+  naval: ["pd_naval_settings", "pd_naval_classes", "pd_naval_factions", "pd_naval_relations", "pd_naval_systems"],
 } as const;
 
 export type BackupScope = keyof typeof BACKUP_SCOPES;

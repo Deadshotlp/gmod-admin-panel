@@ -48,6 +48,8 @@ const RELOAD_AREAS: Array<{ key: string; label: string }> = [
   { key: "kisten", label: "Transportkisten" },
   { key: "funk", label: "Funk & Sprachreichweiten" },
   { key: "charakter", label: "Charakter-Einstellungen" },
+  { key: "naval", label: "Raumflotte" },
+  { key: "naval_galaxy", label: "Raumflotte: Galaxie" },
   { key: "all", label: "Alles" },
 ];
 

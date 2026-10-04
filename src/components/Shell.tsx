@@ -16,6 +16,7 @@ const NAV: Array<{ href: string; label: string }> = [
   { href: "/kisten", label: "Transportkisten" },
   { href: "/funk", label: "Funk" },
   { href: "/charakter", label: "Charakter-Einstellungen" },
+  { href: "/raumflotte", label: "Raumflotte" },
   { href: "/logs", label: "Admin-Logs" },
   { href: "/arccw", label: "ArcCW-Schaden" },
   { href: "/spieler", label: "Spieler & Charaktere" },

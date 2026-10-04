@@ -37,6 +37,7 @@ const SCOPE_LABEL: Record<string, string> = {
   kisten: "Transportkisten",
   funk: "Funk & Sprachreichweiten",
   charakter: "Charakter-Einstellungen",
+  naval: "Raumflotte",
 };
 
 function formatSize(bytes: number): string {

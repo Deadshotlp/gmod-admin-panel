@@ -16,6 +16,9 @@ interface Ship {
   orderCount: number;
   jumpTo: string | null;
   mapShip: boolean;
+  hull: number;
+  roe: string | null;
+  target: number | null;
   speed: number;
   distanceKm: number | null;
   updatedAt: number;
@@ -45,6 +48,13 @@ const ORDER_LABEL: Record<string, string> = {
   patrol: "Patrouille",
   orbit: "Orbit",
   jump: "Sprung",
+  attack: "Angriff",
+};
+
+const ROE_LABEL: Record<string, string> = {
+  hold: "Feuer halten",
+  return: "Nur zurückschießen",
+  free: "Feuer frei (alle Feinde)",
 };
 
 export default function FlotteManager({ user }: { user: PanelUser }) {
@@ -62,6 +72,7 @@ export default function FlotteManager({ user }: { user: PanelUser }) {
   const [radiusKm, setRadiusKm] = useState("");
   const [move, setMove] = useState({ x: 10, y: 0, z: 0 });
   const [edit, setEdit] = useState({ name: "", factionId: "" });
+  const [attackId, setAttackId] = useState("");
 
   const canEdit = user.role === "editor" || user.role === "admin";
 
@@ -187,6 +198,7 @@ export default function FlotteManager({ user }: { user: PanelUser }) {
                 <th>System</th>
                 <th>Befehl</th>
                 <th>Zustand</th>
+                <th style={{ textAlign: "right" }}>Hülle</th>
                 <th style={{ textAlign: "right" }}>Abstand</th>
               </tr>
             </thead>
@@ -217,6 +229,9 @@ export default function FlotteManager({ user }: { user: PanelUser }) {
                     {s.orderCount > 1 ? ` (+${s.orderCount - 1})` : ""}
                   </td>
                   <td>{STATE_LABEL[s.state] ?? s.state}</td>
+                  <td style={{ textAlign: "right", color: s.hull > 50 ? "var(--text)" : s.hull > 25 ? "#d8c95a" : "#f05046" }}>
+                    {s.hull} %
+                  </td>
                   <td style={{ textAlign: "right" }}>{s.distanceKm !== null ? `${s.distanceKm} km` : "-"}</td>
                 </tr>
               ))}
@@ -305,7 +320,7 @@ export default function FlotteManager({ user }: { user: PanelUser }) {
 
                 {ship.mapShip ? (
                   <div className="notice">
-                    Das Map-Schiff steuern die Konsolen auf der Brücke. Umbenennen geht hier.
+                    Das Map-Schiff steuern die Konsolen auf der Brücke. Umbenennen und Reparieren gehen hier.
                   </div>
                 ) : (
                   canEdit && (
@@ -322,6 +337,43 @@ export default function FlotteManager({ user }: { user: PanelUser }) {
                           Zum Map-Schiff springen
                         </button>
                       </div>
+
+                      <div className="card-label">Gefecht</div>
+                      <p className="subtitle" style={{ margin: "0 0 6px" }}>
+                        Hülle {ship.hull} % · {ROE_LABEL[ship.roe ?? ""] ?? "-"}
+                        {ship.target ? ` · Ziel: ${data.ships.find((t) => t.id === ship.target)?.name ?? "#" + ship.target}` : ""}
+                      </p>
+                      <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                        <select value={attackId} onChange={(event) => setAttackId(event.target.value)} style={inputStyle}>
+                          <option value="">Angriffsziel wählen…</option>
+                          {data.ships
+                            .filter((t) => t.id !== ship.id && t.systemId === ship.systemId && t.serverKey === ship.serverKey)
+                            .map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name} ({factionName(t.factionId)})
+                              </option>
+                            ))}
+                        </select>
+                        <button
+                          disabled={busy || !attackId}
+                          onClick={() =>
+                            void send({ action: "order", id: ship.id, type: "attack", targetId: Number(attackId) }, "Greift an")
+                          }
+                        >
+                          Angreifen
+                        </button>
+                      </div>
+                      <select
+                        value={ship.roe ?? "return"}
+                        onChange={(event) => void send({ action: "roe", id: ship.id, roe: event.target.value }, "Feuerverhalten gesetzt")}
+                        style={{ ...inputStyle, marginBottom: 10 }}
+                      >
+                        {Object.entries(ROE_LABEL).map(([value, label]) => (
+                          <option key={value} value={value}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
 
                       <div className="card-label">Sprung</div>
                       <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
@@ -442,6 +494,15 @@ export default function FlotteManager({ user }: { user: PanelUser }) {
                         }
                       >
                         Übernehmen
+                      </button>
+                      <button
+                        disabled={busy}
+                        onClick={() => {
+                          if (!confirm(`${ship.name} vollständig reparieren?`)) return;
+                          void send({ action: "repair", id: ship.id }, "Repariert");
+                        }}
+                      >
+                        Reparieren
                       </button>
                       {!ship.mapShip && (
                         <button

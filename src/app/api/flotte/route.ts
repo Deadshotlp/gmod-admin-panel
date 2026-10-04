@@ -31,6 +31,8 @@ interface ShipRow {
   vy: number;
   vz: number;
   state: string;
+  hull: number;
+  subs: string;
   orders: string;
   hyper: string;
   profile: string | null;
@@ -49,9 +51,11 @@ async function load() {
   const [ships, classes, factions, systems] = await Promise.all([
     query<ShipRow>(
       "SELECT `id`, `server_key`, `name`, `class_id`, `faction_id`, `system_id`, `px`, `py`, `pz`, `vx`, `vy`, `vz`, " +
-        "`state`, `orders`, `hyper`, `profile`, `updated_at` FROM `pd_naval_ships` ORDER BY `server_key`, `id`",
+        "`state`, `hull`, `subs`, `orders`, `hyper`, `profile`, `updated_at` FROM `pd_naval_ships` ORDER BY `server_key`, `id`",
     ),
-    query<{ id: string; name: string; faction: string }>("SELECT `id`, `name`, `faction` FROM `pd_naval_classes` ORDER BY `position`, `id`"),
+    query<{ id: string; name: string; faction: string; hull: number }>(
+      "SELECT `id`, `name`, `faction`, `hull` FROM `pd_naval_classes` ORDER BY `position`, `id`",
+    ),
     query<{ id: string; name: string }>("SELECT `id`, `name` FROM `pd_naval_factions` ORDER BY `position`, `id`"),
     query<{ id: string; name: string }>("SELECT `id`, `name` FROM `pd_naval_systems` WHERE `hidden` = 0 ORDER BY `name`"),
   ]);
@@ -67,6 +71,7 @@ async function load() {
       )
     : [];
 
+  const classHull = new Map(classes.map((c) => [c.id, Number(c.hull) || 1]));
   const mapShips = new Map(ships.filter((ship) => ship.profile).map((ship) => [ship.server_key, ship]));
 
   return {
@@ -75,6 +80,7 @@ async function load() {
       const orders = parse<{ queue?: Array<{ type?: string }> }>(ship.orders, {});
       const hyper = parse<{ to?: string }>(ship.hyper, {});
       const sameSystem = map && map.system_id === ship.system_id && map !== ship;
+      const subs = parse<{ roe?: string; target?: number }>(ship.subs, {});
 
       return {
         id: Number(ship.id),
@@ -88,6 +94,9 @@ async function load() {
         orderCount: orders.queue?.length ?? 0,
         jumpTo: hyper.to ?? null,
         mapShip: Boolean(ship.profile),
+        hull: Math.max(0, Math.round((Number(ship.hull) / (classHull.get(ship.class_id) ?? 1)) * 100)),
+        roe: subs.roe ?? null,
+        target: subs.target ?? null,
         speed: Math.round(Math.hypot(Number(ship.vx), Number(ship.vy), Number(ship.vz))),
         distanceKm: sameSystem
           ? Math.round(
@@ -98,7 +107,7 @@ async function load() {
         updatedAt: Number(ship.updated_at),
       };
     }),
-    classes,
+    classes: classes.map((c) => ({ id: c.id, name: c.name, faction: c.faction })),
     factions,
     systems,
     bodies: bodies.map((body) => ({ id: body.id, systemId: body.system_id, name: body.name, type: body.type })),
@@ -123,7 +132,8 @@ const schema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("order"),
     id: z.number().int().positive(),
-    type: z.enum(["hold", "jump", "jumpnear", "orbit", "approach", "move"]),
+    type: z.enum(["hold", "jump", "jumpnear", "orbit", "approach", "move", "attack"]),
+    targetId: z.number().int().positive().optional(),
     systemId: id.optional(),
     bodyId: id.optional(),
     radiusKm: z.number().min(1).max(10_000_000).optional(),
@@ -138,6 +148,8 @@ const schema = z.discriminatedUnion("action", [
     factionId: id.optional(),
   }),
   z.object({ action: z.literal("delete"), id: z.number().int().positive() }),
+  z.object({ action: z.literal("roe"), id: z.number().int().positive(), roe: z.enum(["hold", "return", "free"]) }),
+  z.object({ action: z.literal("repair"), id: z.number().int().positive() }),
   z.object({ action: z.literal("pause") }),
 ]);
 
@@ -222,6 +234,9 @@ export async function POST(request: Request) {
       } else if (input.type === "orbit" || input.type === "approach") {
         if (!input.bodyId) return NextResponse.json({ error: "Himmelskörper fehlt" }, { status: 400 });
         commands.push(`${base} ${input.type} ${input.bodyId}${input.type === "orbit" && input.radiusKm ? ` ${input.radiusKm}` : ""}`);
+      } else if (input.type === "attack") {
+        if (!input.targetId) return NextResponse.json({ error: "Ziel fehlt" }, { status: 400 });
+        commands.push(`${base} attack ${input.targetId}`);
       } else if (input.type === "move") {
         commands.push(`${base} move ${input.x ?? 0} ${input.y ?? 0} ${input.z ?? 0}`);
       } else {
@@ -237,6 +252,14 @@ export async function POST(request: Request) {
 
     case "delete":
       commands.push(`pd_naval_delete ${input.id}`);
+      break;
+
+    case "roe":
+      commands.push(`pd_naval_roe ${input.id} ${input.roe}`);
+      break;
+
+    case "repair":
+      commands.push(`pd_naval_repair ${input.id}`);
       break;
 
     case "pause":

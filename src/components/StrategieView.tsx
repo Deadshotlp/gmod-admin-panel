@@ -18,10 +18,85 @@ interface Hardpoint {
   arcH?: number;
 }
 
+interface TerritoryRow {
+  kind: "system" | "sector" | "region";
+  key: string;
+  factionId: string;
+  contested: boolean;
+}
+
+// Regionsnamen wie im Gamemode vereinheitlichen ("*Outer", "Outer" -> "Outer Rim")
+const REGION_ALIAS: Record<string, string> = {
+  outer: "Outer Rim", mid: "Mid Rim", inner: "Inner Rim", core: "Core Worlds", expansion: "Expansion Region",
+  wild: "Wild Space", unknown: "Unknown Regions", deep: "Deep Core", hutt: "Hutt Space", colonies: "Colonies",
+};
+const normRegion = (r: string) => {
+  const t = (r ?? "").replace(/^\*+/, "").trim();
+  return REGION_ALIAS[t.toLowerCase()] ?? t;
+};
+
+const INFLUENCE = 700; // pc
+
+// Einflussraster wie im Gamemode: Zelle = Fraktion des nächsten Systems mit Gebiet
+function influenceGrid(owned: Array<{ x: number; y: number; f: string }>, cell: number) {
+  if (owned.length === 0) return null;
+  const buckets = new Map<string, typeof owned>();
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const o of owned) {
+    const key = `${Math.floor(o.x / INFLUENCE)}:${Math.floor(o.y / INFLUENCE)}`;
+    buckets.set(key, [...(buckets.get(key) ?? []), o]);
+    x0 = Math.min(x0, o.x); y0 = Math.min(y0, o.y); x1 = Math.max(x1, o.x); y1 = Math.max(y1, o.y);
+  }
+  x0 -= INFLUENCE; y0 -= INFLUENCE; x1 += INFLUENCE; y1 += INFLUENCE;
+  const nx = Math.ceil((x1 - x0) / cell), ny = Math.ceil((y1 - y0) / cell);
+  const owner: Array<Array<string | null>> = [];
+  for (let j = 0; j < ny; j++) {
+    const row: Array<string | null> = [];
+    const cy = y0 + (j + 0.5) * cell;
+    for (let i = 0; i < nx; i++) {
+      const cx = x0 + (i + 0.5) * cell;
+      const bx = Math.floor(cx / INFLUENCE), by = Math.floor(cy / INFLUENCE);
+      let best: string | null = null, bestD = INFLUENCE * INFLUENCE;
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+        for (const o of buckets.get(`${bx + dx}:${by + dy}`) ?? []) {
+          const d = (o.x - cx) ** 2 + (o.y - cy) ** 2;
+          if (d < bestD) { best = o.f; bestD = d; }
+        }
+      }
+      row.push(best);
+    }
+    owner.push(row);
+  }
+  const strips: Array<{ x: number; y: number; w: number; f: string }> = [];
+  const fronts: Array<[number, number, number, number, boolean]> = [];
+  for (let j = 0; j < ny; j++) {
+    let i = 0;
+    while (i < nx) {
+      const f = owner[j][i];
+      const start = i;
+      while (i < nx && owner[j][i] === f) i++;
+      if (f) strips.push({ x: x0 + start * cell, y: y0 + j * cell, w: (i - start) * cell, f });
+    }
+    for (let k = 0; k < nx; k++) {
+      const a = owner[j][k];
+      if (k + 1 < nx) {
+        const b = owner[j][k + 1];
+        if (a !== b && (a || b)) fronts.push([x0 + (k + 1) * cell, y0 + j * cell, x0 + (k + 1) * cell, y0 + (j + 1) * cell, Boolean(a && b)]);
+      }
+      if (j + 1 < ny) {
+        const b = owner[j + 1][k];
+        if (a !== b && (a || b)) fronts.push([x0 + k * cell, y0 + (j + 1) * cell, x0 + (k + 1) * cell, y0 + (j + 1) * cell, Boolean(a && b)]);
+      }
+    }
+  }
+  return { strips, fronts, cell };
+}
+
 interface StaticData {
   factions: Array<{ id: string; name: string; color: string }>;
   classes: Array<{ id: string; name: string; lengthM: number; hull: number; hardpoints: Hardpoint[] }>;
-  systems: Array<{ id: string; name: string; x: number; y: number; region: string }>;
+  systems: Array<{ id: string; name: string; x: number; y: number; region: string; sector: string }>;
+  territory: TerritoryRow[];
   routes: Array<{ id: string; name: string; major: boolean; lines: number[][][] }>;
   mapHardpoints: Hardpoint[];
 }
@@ -144,6 +219,13 @@ export default function StrategieView({ user }: { user: PanelUser }) {
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
   const [factionFilter, setFactionFilter] = useState("");
   const [showRoutes, setShowRoutes] = useState(true);
+  // Gebiete (Stufe 4d): anzeigen, bearbeiten (gesammelte Änderungen)
+  const [showTerritory, setShowTerritory] = useState(true);
+  const [terrEdit, setTerrEdit] = useState(false);
+  const [terrFaction, setTerrFaction] = useState("");
+  const [terrScope, setTerrScope] = useState<"system" | "sector" | "region">("system");
+  const [terrContested, setTerrContested] = useState(false);
+  const [pending, setPending] = useState<TerritoryRow[]>([]);
   // Karte füllt die Breite und die Fensterhöhe
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ w: 1100, h: 720 });
@@ -220,6 +302,24 @@ export default function StrategieView({ user }: { user: PanelUser }) {
   }, [systemId]);
 
   const systemsById = useMemo(() => new Map((stat?.systems ?? []).map((s) => [s.id, s])), [stat]);
+
+  // Wirksame Gebiete: System vor Sektor vor Region (inkl. noch nicht gespeicherter Änderungen)
+  const territory = useMemo(() => {
+    const rows = new Map<string, TerritoryRow>();
+    for (const r of [...(stat?.territory ?? []), ...pending]) rows.set(`${r.kind}|${r.key}`, r);
+    const get = (kind: string, key: string) => rows.get(`${kind}|${key}`);
+    const byId = new Map<string, string>();
+    const contested = new Set<string>();
+    const owned: Array<{ x: number; y: number; f: string }> = [];
+    for (const sys of stat?.systems ?? []) {
+      const a = get("system", sys.id), b = sys.sector ? get("sector", sys.sector) : undefined, c = get("region", normRegion(sys.region));
+      const f = a?.factionId || b?.factionId || c?.factionId || "";
+      if (f) { byId.set(sys.id, f); owned.push({ x: sys.x, y: sys.y, f }); }
+      if (a?.contested) contested.add(sys.id);
+    }
+    return { byId, contested, owned };
+  }, [stat, pending]);
+  const grid = useMemo(() => influenceGrid(territory.owned, 150), [territory]);
   const factionColor = useCallback(
     (id: string) => stat?.factions.find((f) => f.id === id)?.color ?? "#cccccc",
     [stat],
@@ -328,6 +428,54 @@ export default function StrategieView({ user }: { user: PanelUser }) {
     ctx.font = "12px sans-serif";
 
     if (mode === "galaxy" && stat) {
+      // Gebiete und Frontlinien
+      if (showTerritory && grid) {
+        ctx.globalAlpha = 0.16;
+        for (const st of grid.strips) {
+          const [ax, ay] = toScreen(st.x, st.y + grid.cell);
+          const [bx, by] = toScreen(st.x + st.w, st.y);
+          if (bx < 0 || ax > w || by < 0 || ay > h) continue;
+          ctx.fillStyle = factionColor(st.f);
+          ctx.fillRect(ax, ay, Math.max(bx - ax, 1), Math.max(by - ay, 1));
+        }
+        ctx.globalAlpha = 1;
+        ctx.lineWidth = 1.5;
+        for (const fr of grid.fronts) {
+          const [ax, ay] = toScreen(fr[0], fr[1]);
+          const [bx, by] = toScreen(fr[2], fr[3]);
+          if (Math.max(ax, bx) < 0 || Math.min(ax, bx) > w || Math.max(ay, by) < 0 || Math.min(ay, by) > h) continue;
+          ctx.strokeStyle = fr[4] ? "rgba(255,90,70,0.85)" : "rgba(200,215,240,0.25)";
+          ctx.beginPath();
+          ctx.moveTo(ax, ay);
+          ctx.lineTo(bx, by);
+          ctx.stroke();
+        }
+        ctx.lineWidth = 1;
+        const pulse = 0.5 + Math.sin(Date.now() / 250) * 0.5;
+        for (const id of territory.contested) {
+          const sys = systemsById.get(id);
+          if (!sys) continue;
+          const [x, y] = toScreen(sys.x, sys.y);
+          ctx.strokeStyle = `rgba(255,60,50,${0.4 + pulse * 0.6})`;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(x, y, 8, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.lineWidth = 1;
+        }
+        // Im Bearbeiten-Modus: alle Systeme sichtbar mit Besitzer
+        if (terrEdit && v.scale > 0.08) {
+          for (const sys of stat.systems) {
+            const [x, y] = toScreen(sys.x, sys.y);
+            if (x < -5 || x > w + 5 || y < -5 || y > h + 5) continue;
+            const f = territory.byId.get(sys.id);
+            ctx.fillStyle = f ? factionColor(f) : "rgba(150,160,180,0.6)";
+            ctx.fillRect(x - 2, y - 2, 4, 4);
+            if (v.scale > 0.6) ctx.fillText(sys.name, x + 5, y - 3);
+          }
+        }
+      }
+
       // Routen
       for (const r of stat.routes) {
         ctx.strokeStyle = r.major ? "rgba(90,140,220,0.6)" : "rgba(70,90,130,0.35)";
@@ -536,11 +684,13 @@ export default function StrategieView({ user }: { user: PanelUser }) {
     ctx.fillText(
       mode === "system"
         ? "Links: auswählen / Rahmen ziehen (Shift = dazu) · Rechts: bewegen / Feind angreifen · Mitte ziehen: verschieben"
-        : "Links: System öffnen · Rechts: gewählte Schiffe dorthin springen · Mitte ziehen: verschieben",
+        : terrEdit
+          ? "Gebiete: Links-Klick auf System oder Rahmen ziehen = zuordnen · Mitte ziehen: verschieben"
+          : "Links: System öffnen · Rechts: gewählte Schiffe dorthin springen · Mitte ziehen: verschieben",
       8,
       18,
     );
-  }, [mode, cur.view, stat, ships, bodies, bodiesById, now, selectedIds, systemId, systemsById, factionColor, box, showRoutes, size]);
+  }, [mode, cur.view, stat, ships, bodies, bodiesById, now, selectedIds, systemId, systemsById, factionColor, box, showRoutes, size, showTerritory, grid, territory, terrEdit]);
 
   /* ---------------------------------------------------------------- */
   /* Maus                                                               */
@@ -592,9 +742,53 @@ export default function StrategieView({ user }: { user: PanelUser }) {
   // Befehlbare Schiffe der Auswahl (das Map-Schiff steuern die Spieler)
   const commandable = () => (live?.ships ?? []).filter((x) => selectedIds.includes(x.id) && !x.map && x.state !== "destroyed");
 
+  // Gebiet für ein System nach gewähltem Umfang (System, sein Sektor, seine Region)
+  const assign = (sysIds: string[], scope: "system" | "sector" | "region") => {
+    const rows: TerritoryRow[] = [];
+    const seen = new Set<string>();
+    for (const id of sysIds) {
+      const sys = systemsById.get(id);
+      if (!sys) continue;
+      const key = scope === "system" ? sys.id : scope === "sector" ? sys.sector : normRegion(sys.region);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      rows.push({ kind: scope, key, factionId: terrFaction, contested: scope === "system" && terrContested });
+    }
+    if (rows.length) setPending((list) => [...list.filter((p) => !rows.some((r) => r.kind === p.kind && r.key === p.key)), ...rows]);
+  };
+
+  const savePending = async () => {
+    if (pending.length === 0) return;
+    setBusy(true);
+    try {
+      const response = await fetchWithTimeout("/api/strategie", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ changes: pending }),
+      });
+      const { data, error } = await readJson<{ ok: boolean; reload: { ok: boolean; message: string } }>(response);
+      if (error) {
+        setMessage({ ok: false, text: error });
+        return;
+      }
+      setMessage({ ok: Boolean(data?.reload.ok), text: data?.reload.ok ? `${pending.length} Gebietsänderungen gespeichert, Server lädt neu` : `Gespeichert, Neuladen fehlgeschlagen: ${data?.reload.message}` });
+      const st = await readJson<StaticData>(await fetchWithTimeout("/api/strategie?static=1", { cache: "no-store" }));
+      if (st.data) setStat(st.data);
+      setPending([]);
+    } catch {
+      setMessage({ ok: false, text: "Speichern fehlgeschlagen" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const leftClick = (sx: number, sy: number, shift: boolean) => {
     const hit = nearest(sx, sy);
     if (mode === "galaxy") {
+      if (terrEdit && canEdit) {
+        if (hit.system) assign([hit.system.id], terrScope);
+        return;
+      }
       if (hit.system) setSystemId(hit.system.id);
       return;
     }
@@ -607,9 +801,22 @@ export default function StrategieView({ user }: { user: PanelUser }) {
   };
 
   const boxSelect = (b: { x0: number; y0: number; x1: number; y1: number }, shift: boolean) => {
-    if (mode !== "system") return;
     const c = canvasRef.current!;
     const v = cur.view;
+    if (mode === "galaxy") {
+      // Rahmen im Bearbeiten-Modus: alle Systeme darin zuordnen
+      if (!terrEdit || !canEdit || !stat) return;
+      const minX = Math.min(b.x0, b.x1), maxX = Math.max(b.x0, b.x1), minY = Math.min(b.y0, b.y1), maxY = Math.max(b.y0, b.y1);
+      const ids = stat.systems
+        .filter((sys) => {
+          const px = c.width / 2 + (sys.x - v.cx) * v.scale;
+          const py = c.height / 2 - (sys.y - v.cy) * v.scale;
+          return px >= minX && px <= maxX && py >= minY && py <= maxY;
+        })
+        .map((sys) => sys.id);
+      assign(ids, terrScope);
+      return;
+    }
     const minX = Math.min(b.x0, b.x1);
     const maxX = Math.max(b.x0, b.x1);
     const minY = Math.min(b.y0, b.y1);
@@ -899,6 +1106,62 @@ export default function StrategieView({ user }: { user: PanelUser }) {
               </>
             )}
           </div>
+
+          {mode === "galaxy" && (
+            <div className="panel" style={{ marginBottom: 12 }}>
+              <div className="card-label">Gebiete und Frontlinien</div>
+              <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14, marginBottom: 6 }}>
+                <input type="checkbox" checked={showTerritory} onChange={(e) => setShowTerritory(e.target.checked)} /> anzeigen
+              </label>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 13, marginBottom: 8 }}>
+                {stat?.factions.map((f) => (
+                  <span key={f.id} style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                    <span style={{ width: 10, height: 10, background: f.color, display: "inline-block" }} /> {f.name}
+                  </span>
+                ))}
+                <span style={{ color: "#ff5a46" }}>rot = Front / umkämpft</span>
+              </div>
+              {canEdit && (
+                <>
+                  <button className={terrEdit ? "primary" : undefined} onClick={() => setTerrEdit(!terrEdit)} style={{ marginBottom: 8 }}>
+                    {terrEdit ? "Bearbeiten beenden" : "Gebiete bearbeiten"}
+                  </button>
+                  {terrEdit && (
+                    <>
+                      <p className="subtitle" style={{ margin: "0 0 6px" }}>
+                        Klick auf ein System oder Rahmen ziehen: Gebiet zuordnen. System gilt vor Sektor vor Region.
+                      </p>
+                      <select value={terrFaction} onChange={(e) => setTerrFaction(e.target.value)} style={{ ...inputStyle, marginBottom: 6 }}>
+                        <option value="">Keine Fraktion (Zuordnung entfernen)</option>
+                        {stat?.factions.map((f) => (
+                          <option key={f.id} value={f.id}>
+                            {f.name}
+                          </option>
+                        ))}
+                      </select>
+                      <select value={terrScope} onChange={(e) => setTerrScope(e.target.value as "system" | "sector" | "region")} style={{ ...inputStyle, marginBottom: 6 }}>
+                        <option value="system">Nur das System</option>
+                        <option value="sector">Ganzer Sektor des Systems</option>
+                        <option value="region">Ganze Region des Systems</option>
+                      </select>
+                      <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14, marginBottom: 8 }}>
+                        <input type="checkbox" checked={terrContested} disabled={terrScope !== "system"} onChange={(e) => setTerrContested(e.target.checked)} /> umkämpft
+                        (nur Systeme)
+                      </label>
+                      <div className="button-row">
+                        <button className="primary" disabled={busy || pending.length === 0} onClick={() => void savePending()}>
+                          Speichern ({pending.length})
+                        </button>
+                        <button disabled={pending.length === 0} onClick={() => setPending([])}>
+                          Verwerfen
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
           <div className="panel" style={{ marginBottom: 12, maxHeight: 260, overflowY: "auto" }}>
             <div className="card-label">Schiffe im System ({shipsHere.length})</div>

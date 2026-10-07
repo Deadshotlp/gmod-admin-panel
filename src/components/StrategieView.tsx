@@ -136,8 +136,11 @@ export default function StrategieView({ user }: { user: PanelUser }) {
   const [mode, setMode] = useState<"galaxy" | "system">("system");
   const [systemId, setSystemId] = useState<string | null>(null);
   const [bodies, setBodies] = useState<Body[]>([]);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [pick, setPick] = useState<null | "move" | "attack" | "jump">(null);
+  // Auswahl wie in einem Strategiespiel: Rahmen ziehen (Shift = dazu),
+  // Rechtsklick = Befehl an alle gewählten
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [box, setBox] = useState<null | { x0: number; y0: number; x1: number; y1: number }>(null);
+  const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
   const [factionFilter, setFactionFilter] = useState("");
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -237,6 +240,30 @@ export default function StrategieView({ user }: { user: PanelUser }) {
     } finally {
       setBusy(false);
     }
+  };
+
+  const sendMany = async (bodies: Array<Record<string, unknown>>, success: string) => {
+    if (bodies.length === 0) return;
+    setBusy(true);
+    setMessage(null);
+    let ok = 0;
+    let lastError = "";
+    for (const body of bodies) {
+      try {
+        const response = await fetchWithTimeout("/api/flotte", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const { data, error } = await readJson<{ ok: boolean; message: string }>(response);
+        if (!error && data?.ok) ok++;
+        else lastError = error ?? data?.message ?? "Fehlgeschlagen";
+      } catch {
+        lastError = "Befehl fehlgeschlagen";
+      }
+    }
+    setBusy(false);
+    setMessage(ok === bodies.length ? { ok: true, text: success } : { ok: false, text: `${ok}/${bodies.length} Befehle gesendet. ${lastError}` });
   };
 
   /* ---------------------------------------------------------------- */
@@ -404,7 +431,7 @@ export default function StrategieView({ user }: { user: PanelUser }) {
         ctx.lineTo(x - dx * 6 + dy * 5, y - dy * 6 - dx * 5);
         ctx.closePath();
         ctx.fill();
-        if (s.id === selectedId) {
+        if (selectedIds.includes(s.id)) {
           ctx.strokeStyle = "#f0c83c";
           ctx.strokeRect(x - 12, y - 12, 24, 24);
         }
@@ -425,16 +452,25 @@ export default function StrategieView({ user }: { user: PanelUser }) {
       ctx.fillText(`100 px = ${km(100 / Math.max(v.scale, 1e-12))}`, 8, h - 10);
     }
 
-    if (pick) {
-      ctx.fillStyle = "#f0c83c";
-      ctx.font = "14px sans-serif";
-      ctx.fillText(
-        pick === "move" ? "Klick: Ziel  -  Esc: abbrechen" : pick === "attack" ? "Klick auf das Ziel-Schiff" : "Klick auf das Zielsystem",
-        8,
-        20,
-      );
+    if (box) {
+      ctx.strokeStyle = "#f0c83c";
+      ctx.fillStyle = "rgba(240,200,60,0.08)";
+      const bx = Math.min(box.x0, box.x1);
+      const by = Math.min(box.y0, box.y1);
+      ctx.fillRect(bx, by, Math.abs(box.x1 - box.x0), Math.abs(box.y1 - box.y0));
+      ctx.strokeRect(bx, by, Math.abs(box.x1 - box.x0), Math.abs(box.y1 - box.y0));
     }
-  }, [mode, cur.view, stat, ships, bodies, bodiesById, now, selectedId, systemId, systemsById, factionColor, pick]);
+
+    ctx.fillStyle = "#8c96a5";
+    ctx.font = "12px sans-serif";
+    ctx.fillText(
+      mode === "system"
+        ? "Links: auswählen / Rahmen ziehen (Shift = dazu) · Rechts: bewegen / Feind angreifen · Mitte ziehen: verschieben"
+        : "Links: System öffnen · Rechts: gewählte Schiffe dorthin springen · Mitte ziehen: verschieben",
+      8,
+      18,
+    );
+  }, [mode, cur.view, stat, ships, bodies, bodiesById, now, selectedIds, systemId, systemsById, factionColor, box]);
 
   /* ---------------------------------------------------------------- */
   /* Maus                                                               */
@@ -483,44 +519,102 @@ export default function StrategieView({ user }: { user: PanelUser }) {
     return { ship: null, system: best };
   };
 
-  const onClick = (sx: number, sy: number) => {
+  // Befehlbare Schiffe der Auswahl (das Map-Schiff steuern die Spieler)
+  const commandable = () => (live?.ships ?? []).filter((x) => selectedIds.includes(x.id) && !x.map && x.state !== "destroyed");
+
+  const leftClick = (sx: number, sy: number, shift: boolean) => {
     const hit = nearest(sx, sy);
-    if (pick === "jump" && hit.system && selected) {
-      void send({ action: "order", id: selected.id, type: "jump", systemId: hit.system.id }, `${selected.name} springt nach ${hit.system.name}`);
-      setPick(null);
+    if (mode === "galaxy") {
+      if (hit.system) setSystemId(hit.system.id);
       return;
     }
-    if (pick === "attack" && hit.ship && selected && hit.ship.id !== selected.id) {
-      void send({ action: "order", id: selected.id, type: "attack", targetId: hit.ship.id }, `${selected.name} greift ${hit.ship.name} an`);
-      setPick(null);
-      return;
+    if (hit.ship) {
+      const id = hit.ship.id;
+      setSelectedIds((list) => (shift ? (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]) : [id]));
+    } else if (!shift) {
+      setSelectedIds([]);
     }
-    if (pick === "move" && selected && mapShip && mapShip.systemId === systemId) {
-      const [wx, wy] = toWorld(sx, sy);
-      const rel = { x: (wx - mapShip.p[0]) / 1000, y: (wy - mapShip.p[1]) / 1000, z: (selected.p[2] - mapShip.p[2]) / 1000 };
-      void send({ action: "order", id: selected.id, type: "move", ...rel }, `${selected.name} fliegt los`);
-      setPick(null);
-      return;
-    }
-    if (mode === "galaxy" && hit.system) {
-      setSystemId(hit.system.id);
-      return;
-    }
-    if (hit.ship) setSelectedId(hit.ship.id);
   };
 
-  // Mausrad zoomt die Karte, die Seite scrollt dabei nicht
-  useEffect(() => {
-    const c = canvasRef.current;
-    if (!c) return;
-    const stop = (e: WheelEvent) => e.preventDefault();
-    c.addEventListener("wheel", stop, { passive: false });
-    return () => c.removeEventListener("wheel", stop);
-  }, []);
+  const boxSelect = (b: { x0: number; y0: number; x1: number; y1: number }, shift: boolean) => {
+    if (mode !== "system") return;
+    const c = canvasRef.current!;
+    const v = cur.view;
+    const minX = Math.min(b.x0, b.x1);
+    const maxX = Math.max(b.x0, b.x1);
+    const minY = Math.min(b.y0, b.y1);
+    const maxY = Math.max(b.y0, b.y1);
+    const inBox = ships
+      .filter((x) => x.systemId === systemId && x.state !== "hyperspace")
+      .filter((x) => {
+        const px = c.width / 2 + (x.p[0] - v.cx) * v.scale;
+        const py = c.height / 2 - (x.p[1] - v.cy) * v.scale;
+        return px >= minX && px <= maxX && py >= minY && py <= maxY;
+      })
+      .map((x) => x.id);
+    setSelectedIds((list) => (shift ? [...new Set([...list, ...inBox])] : inBox));
+  };
+
+  const rightClick = (sx: number, sy: number) => {
+    if (!canEdit) return;
+    const group = commandable();
+    if (group.length === 0) {
+      setMessage({ ok: false, text: "Keine befehlbaren Schiffe gewählt (Links ziehen = Rahmen)" });
+      return;
+    }
+    const hit = nearest(sx, sy);
+
+    if (mode === "galaxy") {
+      if (!hit.system) return;
+      const target = hit.system;
+      void sendMany(
+        group.filter((x) => x.systemId !== target.id).map((x) => ({ action: "order", id: x.id, type: "jump", systemId: target.id })),
+        `${group.length} Schiff(e) springen nach ${target.name}`,
+      );
+      return;
+    }
+
+    // Auf ein Schiff einer anderen Fraktion: angreifen
+    if (hit.ship && !selectedIds.includes(hit.ship.id)) {
+      const target = hit.ship;
+      const attackers = group.filter((x) => x.factionId !== target.factionId);
+      if (attackers.length > 0) {
+        void sendMany(
+          attackers.map((x) => ({ action: "order", id: x.id, type: "attack", targetId: target.id })),
+          `${attackers.length} Schiff(e) greifen ${target.name} an`,
+        );
+        return;
+      }
+    }
+
+    // Sonst bewegen (nur im System des Map-Schiffs: Befehle sind relativ zu ihm)
+    if (!mapShip || mapShip.systemId !== systemId) {
+      setMessage({ ok: false, text: "Bewegen geht nur im System des Map-Schiffs" });
+      return;
+    }
+    const [wx, wy] = hit.ship ? [hit.ship.p[0], hit.ship.p[1]] : toWorld(sx, sy);
+    // Mehrere Schiffe nebeneinander statt auf einen Punkt (Raster, 4 km Abstand)
+    const cols = Math.ceil(Math.sqrt(group.length));
+    void sendMany(
+      group.map((x, i) => {
+        const ox = ((i % cols) - (cols - 1) / 2) * 4000;
+        const oy = (Math.floor(i / cols) - (Math.ceil(group.length / cols) - 1) / 2) * 4000;
+        return {
+          action: "order",
+          id: x.id,
+          type: "move",
+          x: (wx + ox - mapShip.p[0]) / 1000,
+          y: (wy + oy - mapShip.p[1]) / 1000,
+          z: (x.p[2] - mapShip.p[2]) / 1000,
+        };
+      }),
+      `${group.length} Schiff(e) fliegen los`,
+    );
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setPick(null);
+      if (e.key === "Escape") setSelectedIds([]);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -576,28 +670,47 @@ export default function StrategieView({ user }: { user: PanelUser }) {
             ref={canvasRef}
             width={1100}
             height={720}
-            style={{ width: "100%", display: "block", cursor: pick ? "crosshair" : "grab" }}
+            style={{ width: "100%", display: "block", cursor: "default" }}
+            onContextMenu={(e) => e.preventDefault()}
             onMouseDown={(e) => {
               const [x, y] = canvasPos(e);
-              cur.drag.current = { x, y, cx: cur.view.cx, cy: cur.view.cy, moved: false };
+              if (e.button === 1) {
+                // Mitte: Karte verschieben
+                e.preventDefault();
+                cur.drag.current = { x, y, cx: cur.view.cx, cy: cur.view.cy, moved: false };
+              } else if (e.button === 0) {
+                setBox({ x0: x, y0: y, x1: x, y1: y });
+              }
             }}
             onMouseMove={(e) => {
-              const d = cur.drag.current;
-              if (!d) return;
               const [x, y] = canvasPos(e);
-              if (Math.abs(x - d.x) + Math.abs(y - d.y) > 4) d.moved = true;
-              if (d.moved) cur.setView({ ...cur.view, cx: d.cx - (x - d.x) / cur.view.scale, cy: d.cy + (y - d.y) / cur.view.scale });
+              const d = cur.drag.current;
+              if (d) {
+                d.moved = true;
+                cur.setView({ ...cur.view, cx: d.cx - (x - d.x) / cur.view.scale, cy: d.cy + (y - d.y) / cur.view.scale });
+              }
+              if (box) setBox({ ...box, x1: x, y1: y });
             }}
             onMouseUp={(e) => {
-              const d = cur.drag.current;
-              cur.drag.current = null;
-              if (d && !d.moved) {
-                const [x, y] = canvasPos(e);
-                onClick(x, y);
+              const [x, y] = canvasPos(e);
+              if (e.button === 1) {
+                cur.drag.current = null;
+                return;
+              }
+              if (e.button === 2) {
+                rightClick(x, y);
+                return;
+              }
+              if (e.button === 0 && box) {
+                const moved = Math.abs(box.x1 - box.x0) + Math.abs(box.y1 - box.y0) > 6;
+                if (moved) boxSelect({ ...box, x1: x, y1: y }, e.shiftKey);
+                else leftClick(x, y, e.shiftKey);
+                setBox(null);
               }
             }}
             onMouseLeave={() => {
               cur.drag.current = null;
+              setBox(null);
             }}
             onWheel={(e) => {
               const [x, y] = canvasPos(e);
@@ -611,7 +724,59 @@ export default function StrategieView({ user }: { user: PanelUser }) {
 
         <div style={{ flex: 1, minWidth: 320 }}>
           <div className="panel" style={{ marginBottom: 12 }}>
-            <h3 style={{ marginTop: 0 }}>{selected ? `${selected.map ? "★ " : ""}${selected.name}` : "Schiff wählen"}</h3>
+            <h3 style={{ marginTop: 0 }}>
+              {selected ? `${selected.map ? "★ " : ""}${selected.name}` : selectedIds.length > 1 ? `${selectedIds.length} Schiffe gewählt` : "Schiffe wählen"}
+            </h3>
+            {selectedIds.length > 0 && canEdit && (
+              <div className="button-row" style={{ flexWrap: "wrap", marginBottom: 8 }}>
+                <button
+                  disabled={busy}
+                  onClick={() => void sendMany(commandable().map((x) => ({ action: "order", id: x.id, type: "hold" })), "Halten")}
+                >
+                  Halten
+                </button>
+                <button
+                  disabled={busy}
+                  onClick={() => void sendMany(commandable().map((x) => ({ action: "order", id: x.id, type: "jumpnear" })), "Springen zum Map-Schiff")}
+                >
+                  Zum Map-Schiff
+                </button>
+                {selectedIds.length > 1 && (
+                  <select
+                    defaultValue=""
+                    onChange={(e) => {
+                      if (e.target.value) void sendMany(commandable().map((x) => ({ action: "roe", id: x.id, roe: e.target.value })), "Feuerverhalten gesetzt");
+                      e.target.value = "";
+                    }}
+                    style={{ ...inputStyle, maxWidth: 200 }}
+                  >
+                    <option value="">Feuerbefehl für alle…</option>
+                    {Object.entries(ROE_LABEL).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            )}
+            {selectedIds.length > 1 && (
+              <div style={{ fontSize: 13, marginBottom: 6 }}>
+                {(live?.ships ?? [])
+                  .filter((x) => selectedIds.includes(x.id))
+                  .map((x) => (
+                    <div key={x.id} style={{ display: "flex", gap: 8 }}>
+                      <span style={{ flex: 1 }}>
+                        {x.map ? "★ " : ""}
+                        {x.name}
+                      </span>
+                      <span className="subtitle" style={{ margin: 0 }}>
+                        {x.hull} %
+                      </span>
+                    </div>
+                  ))}
+              </div>
+            )}
             {selected && (
               <>
                 <p className="subtitle" style={{ marginTop: 0 }}>
@@ -634,55 +799,17 @@ export default function StrategieView({ user }: { user: PanelUser }) {
                 </p>
 
                 {canEdit && !selected.map && (
-                  <>
-                    <div className="button-row" style={{ flexWrap: "wrap", marginBottom: 6 }}>
-                      <button disabled={busy} onClick={() => void send({ action: "order", id: selected.id, type: "hold" }, "Hält")}>
-                        Halten
-                      </button>
-                      <button
-                        disabled={busy || !mapShip || mapShip.systemId !== systemId || selected.systemId !== systemId}
-                        title="Nur im System des Map-Schiffs"
-                        onClick={() => {
-                          setMode("system");
-                          setPick("move");
-                        }}
-                      >
-                        Bewegen
-                      </button>
-                      <button
-                        disabled={busy}
-                        onClick={() => {
-                          setMode("system");
-                          setPick("attack");
-                        }}
-                      >
-                        Angreifen
-                      </button>
-                      <button
-                        disabled={busy}
-                        onClick={() => {
-                          setMode("galaxy");
-                          setPick("jump");
-                        }}
-                      >
-                        Springen
-                      </button>
-                      <button disabled={busy} onClick={() => void send({ action: "order", id: selected.id, type: "jumpnear" }, "Springt zum Map-Schiff")}>
-                        Zum Map-Schiff
-                      </button>
-                    </div>
-                    <select
-                      value={selected.roe ?? "return"}
-                      onChange={(e) => void send({ action: "roe", id: selected.id, roe: e.target.value }, "Feuerverhalten gesetzt")}
-                      style={inputStyle}
-                    >
-                      {Object.entries(ROE_LABEL).map(([value, label]) => (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  </>
+                  <select
+                    value={selected.roe ?? "return"}
+                    onChange={(e) => void send({ action: "roe", id: selected.id, roe: e.target.value }, "Feuerverhalten gesetzt")}
+                    style={inputStyle}
+                  >
+                    {Object.entries(ROE_LABEL).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
                 )}
 
                 {hardpoints.length > 0 && cls && <HardpointSchema hardpoints={hardpoints} />}
@@ -695,8 +822,10 @@ export default function StrategieView({ user }: { user: PanelUser }) {
             {shipsHere.map((s) => (
               <div
                 key={s.id}
-                onClick={() => setSelectedId(s.id)}
-                style={{ cursor: "pointer", padding: "2px 0", display: "flex", gap: 8, alignItems: "center", fontWeight: s.id === selectedId ? 600 : undefined }}
+                onClick={(e) =>
+                  setSelectedIds((list) => (e.shiftKey ? (list.includes(s.id) ? list.filter((x) => x !== s.id) : [...list, s.id]) : [s.id]))
+                }
+                style={{ cursor: "pointer", padding: "2px 0", display: "flex", gap: 8, alignItems: "center", fontWeight: selectedIds.includes(s.id) ? 600 : undefined }}
               >
                 <span style={{ width: 10, height: 10, borderRadius: 5, background: factionColor(s.factionId), display: "inline-block" }} />
                 <span style={{ flex: 1 }}>

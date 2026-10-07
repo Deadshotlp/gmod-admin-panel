@@ -682,6 +682,16 @@ export default function StrategieView({ user }: { user: PanelUser }) {
     );
   };
 
+  // Mausrad zoomt die Karte, die Seite scrollt dabei nicht (React meldet
+  // onWheel passiv, daher hier ein eigener Listener mit passive: false)
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const stop = (e: WheelEvent) => e.preventDefault();
+    c.addEventListener("wheel", stop, { passive: false });
+    return () => c.removeEventListener("wheel", stop);
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setSelectedIds([]);

@@ -97,6 +97,8 @@ const SETTING_INFO: Array<[string, string, string]> = [
   ["alert_defcon_yellow", "Alarm: DEFCON bei Gelb", "0 = nicht ändern"],
   ["alert_defcon_red", "Alarm: DEFCON bei Rot", "0 = nicht ändern"],
   ["alert_alarm_seconds", "Alarm: Alarmton bei Rot", "Sekunden"],
+  ["alert_red_light", "Alarm: Rotlicht bei Rot", "1 = Map dunkel + rot, 2 = nur rot, 0 = aus"],
+  ["alert_red_lightstyle", "Alarm: Map-Helligkeit bei Rot", "a = dunkel … m = normal"],
   ["sensor_ident_range", "Sensoren: automatisch erkannt bis", "Meter"],
   ["sensor_scan_time", "Sensoren: Dauer eines Scans", "Sekunden"],
   ["shield_mod_bonus", "Schildmodulation: weniger Schildverbrauch", "Anteil"],

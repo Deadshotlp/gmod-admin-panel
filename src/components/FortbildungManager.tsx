@@ -13,7 +13,7 @@ interface Course {
   color: { r: number; g: number; b: number; a: number };
   equip: string[];
   model: string[];
-  badge: { skin: number | null; bodygroups: Array<{ model: string; index: number; value: number }> };
+  badge: { skin: number | null; icon?: string | null; bodygroups: Array<{ model: string; index: number; value: number }> };
   access: { units: string[]; subunits: string[]; jobs: string[] };
   teach: string[];
   requires: string[];
@@ -148,6 +148,7 @@ export default function FortbildungManager({ user }: { user: PanelUser }) {
       durationDays: course.durationDays,
       maxHolders: course.maxHolders,
       skin: course.badge.skin === null ? "" : String(course.badge.skin),
+      icon: course.badge.icon ?? "",
       bodygroups: course.badge.bodygroups
         .map((entry) => `${entry.model}|${entry.index}|${entry.value}`)
         .join("\n"),
@@ -173,6 +174,7 @@ export default function FortbildungManager({ user }: { user: PanelUser }) {
       durationDays: 0,
       maxHolders: 0,
       skin: "",
+      icon: "",
       bodygroups: "",
     });
     setMessage(null);
@@ -212,6 +214,7 @@ export default function FortbildungManager({ user }: { user: PanelUser }) {
         model: parseList(f("model")),
         badge: {
           skin: f("skin") === "" ? null : Number(f("skin")) || 0,
+          icon: f("icon").trim() === "" ? null : f("icon").trim(),
           bodygroups,
         },
         access: {
@@ -455,6 +458,15 @@ export default function FortbildungManager({ user }: { user: PanelUser }) {
                   </Field>
 
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: 12 }}>
+                    <Field label="Icon" hint="Material-Pfad, z. B. icon16/star.png oder icon16/medal_gold_1.png (Silkicons); leer = keins">
+                      <input
+                        value={f("icon")}
+                        onChange={(event) => set("icon", event.target.value)}
+                        disabled={!canEdit}
+                        style={inputStyle}
+                      />
+                    </Field>
+                    <div />
                     <Field label="Abzeichen: Skin" hint="leer = unverändert">
                       <input
                         value={f("skin")}

@@ -35,6 +35,13 @@ const courseInput = z.object({
   model: list,
   badge: z.object({
     skin: z.number().int().min(0).max(63).nullable(),
+    // Kleines Icon (Material-Pfad, z. B. icon16/star.png)
+    icon: z
+      .string()
+      .max(128)
+      .regex(/^[A-Za-z0-9_\-./]*$/, "Icon: nur Buchstaben, Ziffern, _ - . /")
+      .nullable()
+      .optional(),
     bodygroups: z
       .array(
         z.object({

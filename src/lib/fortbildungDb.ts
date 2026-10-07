@@ -29,7 +29,7 @@ export interface Course {
   color: CourseColor;
   equip: string[];
   model: string[];
-  badge: { skin: number | null; bodygroups: BadgeBodygroup[] };
+  badge: { skin: number | null; bodygroups: BadgeBodygroup[]; icon?: string | null };
   access: { units: string[]; subunits: string[]; jobs: string[] };
   teach: string[];
   requires: string[];
@@ -120,10 +120,12 @@ export async function loadCourses(): Promise<Course[]> {
       const parsed = JSON.parse(String(row.badge_json ?? "{}")) as {
         skin?: number | null;
         bodygroups?: BadgeBodygroup[];
+        icon?: string;
       };
 
       badge = {
         skin: typeof parsed.skin === "number" ? parsed.skin : null,
+        icon: typeof parsed.icon === "string" && parsed.icon !== "" ? parsed.icon : null,
         bodygroups: Array.isArray(parsed.bodygroups)
           ? parsed.bodygroups.map((entry) => ({
               model: String(entry.model ?? "*"),
@@ -185,7 +187,7 @@ export interface CourseInput {
   color: CourseColor;
   equip: string[];
   model: string[];
-  badge: { skin: number | null; bodygroups: BadgeBodygroup[] };
+  badge: { skin: number | null; bodygroups: BadgeBodygroup[]; icon?: string | null };
   access: { units: string[]; subunits: string[]; jobs: string[] };
   teach: string[];
   requires: string[];

@@ -15,6 +15,8 @@ export const dynamic = "force-dynamic";
  * wird vorher pd_naval_save geschickt). Befehle laufen als Konsolenbefehle
  * (pd_naval_spawn/order/edit/delete/pause) an den aktiven Server - das
  * Ergebnis steht in der Serverkonsole und nach dem nächsten Speichern hier.
+ * Stufe 3: Flotten (pd_naval_fleets, pd_naval_fleet), Abfangfeld
+ * (pd_naval_interdict), Kapitulation (pd_naval_surrender).
  */
 
 interface ShipRow {
@@ -33,6 +35,8 @@ interface ShipRow {
   state: string;
   hull: number;
   subs: string;
+  flags: string;
+  fleet_id: number;
   orders: string;
   hyper: string;
   profile: string | null;
@@ -48,10 +52,14 @@ function parse<T>(text: string, fallback: T): T {
 }
 
 async function load() {
+  const fleets = await query<{ id: number; server_key: string; name: string; faction_id: string; flagship_id: number; formation: string; slots: string }>(
+    "SELECT `id`, `server_key`, `name`, `faction_id`, `flagship_id`, `formation`, `slots` FROM `pd_naval_fleets` ORDER BY `server_key`, `id`",
+  ).catch(() => []);
+
   const [ships, classes, factions, systems] = await Promise.all([
     query<ShipRow>(
       "SELECT `id`, `server_key`, `name`, `class_id`, `faction_id`, `system_id`, `px`, `py`, `pz`, `vx`, `vy`, `vz`, " +
-        "`state`, `hull`, `subs`, `orders`, `hyper`, `profile`, `updated_at` FROM `pd_naval_ships` ORDER BY `server_key`, `id`",
+        "`state`, `hull`, `subs`, `flags`, `fleet_id`, `orders`, `hyper`, `profile`, `updated_at` FROM `pd_naval_ships` ORDER BY `server_key`, `id`",
     ),
     query<{ id: string; name: string; faction: string; hull: number }>(
       "SELECT `id`, `name`, `faction`, `hull` FROM `pd_naval_classes` ORDER BY `position`, `id`",
@@ -80,7 +88,8 @@ async function load() {
       const orders = parse<{ queue?: Array<{ type?: string }> }>(ship.orders, {});
       const hyper = parse<{ to?: string }>(ship.hyper, {});
       const sameSystem = map && map.system_id === ship.system_id && map !== ship;
-      const subs = parse<{ roe?: string; target?: number }>(ship.subs, {});
+      const subs = parse<{ roe?: string; target?: number; morale?: number; interdict?: boolean }>(ship.subs, {});
+      const flags = parse<{ surrendered?: boolean; prisoner?: boolean; interdictor?: boolean }>(ship.flags, {});
 
       return {
         id: Number(ship.id),
@@ -97,6 +106,11 @@ async function load() {
         hull: Math.max(0, Math.round((Number(ship.hull) / (classHull.get(ship.class_id) ?? 1)) * 100)),
         roe: subs.roe ?? null,
         target: subs.target ?? null,
+        fleetId: Number(ship.fleet_id) || null,
+        morale: typeof subs.morale === "number" ? Math.round(subs.morale) : null,
+        surrendered: Boolean(flags.surrendered),
+        prisoner: Boolean(flags.prisoner),
+        interdictor: Boolean(flags.interdictor) && subs.interdict !== false,
         speed: Math.round(Math.hypot(Number(ship.vx), Number(ship.vy), Number(ship.vz))),
         distanceKm: sameSystem
           ? Math.round(
@@ -105,6 +119,18 @@ async function load() {
             )
           : null,
         updatedAt: Number(ship.updated_at),
+      };
+    }),
+    fleets: fleets.map((fleet) => {
+      const extra = parse<{ mode?: string }>(fleet.slots, {});
+      return {
+        id: Number(fleet.id),
+        serverKey: fleet.server_key,
+        name: fleet.name,
+        factionId: fleet.faction_id,
+        flagshipId: Number(fleet.flagship_id),
+        formation: fleet.formation,
+        mode: extra.mode ?? "formation",
       };
     }),
     classes: classes.map((c) => ({ id: c.id, name: c.name, faction: c.faction })),
@@ -151,6 +177,16 @@ const schema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("roe"), id: z.number().int().positive(), roe: z.enum(["hold", "return", "free"]) }),
   z.object({ action: z.literal("repair"), id: z.number().int().positive() }),
   z.object({ action: z.literal("pause") }),
+  z.object({
+    action: z.literal("fleet"),
+    op: z.enum(["create", "add", "remove", "flagship", "delete", "formation", "mode"]),
+    fleetId: z.number().int().positive().optional(),
+    id: z.number().int().positive().optional(),
+    name: name.optional(),
+    value: z.enum(["line", "column", "wedge", "wall", "sphere", "formation", "engage", "hold"]).optional(),
+  }),
+  z.object({ action: z.literal("interdict"), id: z.number().int().positive(), on: z.boolean() }),
+  z.object({ action: z.literal("surrender"), id: z.number().int().positive(), undo: z.boolean().optional() }),
 ]);
 
 function fail(error: unknown) {
@@ -264,6 +300,35 @@ export async function POST(request: Request) {
 
     case "pause":
       commands.push("pd_naval_pause");
+      break;
+
+    case "fleet": {
+      const need = (value: number | undefined, what: string) => {
+        if (!value) throw new Error(what);
+        return value;
+      };
+      try {
+        if (input.op === "create") commands.push(`pd_naval_fleet create ${need(input.id, "Schiff fehlt")} ${input.name ?? ""}`.trim());
+        else if (input.op === "add") commands.push(`pd_naval_fleet add ${need(input.fleetId, "Flotte fehlt")} ${need(input.id, "Schiff fehlt")}`);
+        else if (input.op === "remove") commands.push(`pd_naval_fleet remove ${need(input.id, "Schiff fehlt")}`);
+        else if (input.op === "flagship") commands.push(`pd_naval_fleet flagship ${need(input.id, "Schiff fehlt")}`);
+        else if (input.op === "delete") commands.push(`pd_naval_fleet delete ${need(input.fleetId, "Flotte fehlt")}`);
+        else {
+          if (!input.value) throw new Error("Wert fehlt");
+          commands.push(`pd_naval_fleet ${input.op} ${need(input.fleetId, "Flotte fehlt")} ${input.value}`);
+        }
+      } catch (error) {
+        return NextResponse.json({ error: (error as Error).message }, { status: 400 });
+      }
+      break;
+    }
+
+    case "interdict":
+      commands.push(`pd_naval_interdict ${input.id} ${input.on ? "on" : "off"}`);
+      break;
+
+    case "surrender":
+      commands.push(`pd_naval_surrender ${input.id}${input.undo ? " undo" : ""}`);
       break;
   }
 

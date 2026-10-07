@@ -19,13 +19,29 @@ interface Ship {
   hull: number;
   roe: string | null;
   target: number | null;
+  fleetId: number | null;
+  morale: number | null;
+  surrendered: boolean;
+  prisoner: boolean;
+  interdictor: boolean;
   speed: number;
   distanceKm: number | null;
   updatedAt: number;
 }
 
+interface Fleet {
+  id: number;
+  serverKey: string;
+  name: string;
+  factionId: string;
+  flagshipId: number;
+  formation: string;
+  mode: string;
+}
+
 interface Data {
   ships: Ship[];
+  fleets: Fleet[];
   classes: Array<{ id: string; name: string; faction: string }>;
   factions: Array<{ id: string; name: string }>;
   systems: Array<{ id: string; name: string }>;
@@ -51,6 +67,20 @@ const ORDER_LABEL: Record<string, string> = {
   attack: "Angriff",
 };
 
+const FORMATION_LABEL: Record<string, string> = {
+  line: "Linie",
+  column: "Kolonne",
+  wedge: "Keil",
+  wall: "Wand",
+  sphere: "Kugel",
+};
+
+const MODE_LABEL: Record<string, string> = {
+  formation: "Formation halten",
+  engage: "Angreifen",
+  hold: "Position halten",
+};
+
 const ROE_LABEL: Record<string, string> = {
   hold: "Feuer halten",
   return: "Nur zurückschießen",
@@ -73,6 +103,8 @@ export default function FlotteManager({ user }: { user: PanelUser }) {
   const [move, setMove] = useState({ x: 10, y: 0, z: 0 });
   const [edit, setEdit] = useState({ name: "", factionId: "" });
   const [attackId, setAttackId] = useState("");
+  const [fleetName, setFleetName] = useState("");
+  const [fleetPick, setFleetPick] = useState("");
 
   const canEdit = user.role === "editor" || user.role === "admin";
 
@@ -143,6 +175,8 @@ export default function FlotteManager({ user }: { user: PanelUser }) {
 
   const className = (id: string) => data.classes.find((c) => c.id === id)?.name ?? id;
   const factionName = (id: string) => data.factions.find((f) => f.id === id)?.name ?? id;
+  const fleets = data.fleets ?? [];
+  const fleetOf = (s: Ship) => fleets.find((fl) => fl.id === s.fleetId && fl.serverKey === s.serverKey) ?? null;
 
   const ship = data.ships.find((s) => s.id === selected) ?? null;
   const shipBodies = ship ? data.bodies.filter((b) => b.systemId === ship.systemId) : [];
@@ -198,6 +232,7 @@ export default function FlotteManager({ user }: { user: PanelUser }) {
                 <th>System</th>
                 <th>Befehl</th>
                 <th>Zustand</th>
+                <th>Flotte</th>
                 <th style={{ textAlign: "right" }}>Hülle</th>
                 <th style={{ textAlign: "right" }}>Abstand</th>
               </tr>
@@ -228,7 +263,14 @@ export default function FlotteManager({ user }: { user: PanelUser }) {
                     {s.order ? ORDER_LABEL[s.order] ?? s.order : "-"}
                     {s.orderCount > 1 ? ` (+${s.orderCount - 1})` : ""}
                   </td>
-                  <td>{STATE_LABEL[s.state] ?? s.state}</td>
+                  <td>
+                    {STATE_LABEL[s.state] ?? s.state}
+                    {s.surrendered ? (s.prisoner ? " · gefangen" : " · kapituliert") : ""}
+                  </td>
+                  <td>
+                    {fleetOf(s)?.name ?? "-"}
+                    {fleetOf(s)?.flagshipId === s.id ? " (Flagge)" : ""}
+                  </td>
                   <td style={{ textAlign: "right", color: s.hull > 50 ? "var(--text)" : s.hull > 25 ? "#d8c95a" : "#f05046" }}>
                     {s.hull} %
                   </td>
@@ -305,6 +347,59 @@ export default function FlotteManager({ user }: { user: PanelUser }) {
               >
                 Erzeugen ({spawn.distanceKm} km voraus)
               </button>
+            </div>
+          )}
+
+          {fleets.length > 0 && (
+            <div className="panel" style={{ marginBottom: 16 }}>
+              <h3 style={{ marginTop: 0 }}>Flotten</h3>
+              {fleets.map((fl) => (
+                <div key={`${fl.serverKey}-${fl.id}`} style={{ marginBottom: 10 }}>
+                  <strong>{fl.name}</strong>
+                  <span className="subtitle">
+                    {" "}
+                    · Flaggschiff {data.ships.find((s) => s.id === fl.flagshipId && s.serverKey === fl.serverKey)?.name ?? "#" + fl.flagshipId}
+                    {" "}· {data.ships.filter((s) => s.fleetId === fl.id && s.serverKey === fl.serverKey).length} Schiffe
+                  </span>
+                  {canEdit && (
+                    <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                      <select
+                        value={fl.formation}
+                        onChange={(event) =>
+                          void send({ action: "fleet", op: "formation", fleetId: fl.id, value: event.target.value }, "Formation gesetzt")
+                        }
+                        style={inputStyle}
+                      >
+                        {Object.entries(FORMATION_LABEL).map(([value, label]) => (
+                          <option key={value} value={value}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={fl.mode}
+                        onChange={(event) => void send({ action: "fleet", op: "mode", fleetId: fl.id, value: event.target.value }, "Befehl gesetzt")}
+                        style={inputStyle}
+                      >
+                        {Object.entries(MODE_LABEL).map(([value, label]) => (
+                          <option key={value} value={value}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        disabled={busy}
+                        onClick={() => {
+                          if (!confirm(`Flotte ${fl.name} auflösen? Die Schiffe bleiben erhalten.`)) return;
+                          void send({ action: "fleet", op: "delete", fleetId: fl.id }, "Flotte aufgelöst");
+                        }}
+                      >
+                        Auflösen
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           )}
 
@@ -459,6 +554,84 @@ export default function FlotteManager({ user }: { user: PanelUser }) {
 
                 {canEdit && (
                   <>
+                    <div className="card-label">Flotte</div>
+                    <p className="subtitle" style={{ margin: "0 0 6px" }}>
+                      {fleetOf(ship) ? `${fleetOf(ship)?.name}${fleetOf(ship)?.flagshipId === ship.id ? " (Flaggschiff)" : ""}` : "In keiner Flotte"}
+                    </p>
+                    <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                      <select value={fleetPick} onChange={(event) => setFleetPick(event.target.value)} style={inputStyle}>
+                        <option value="">Flotte wählen…</option>
+                        {fleets
+                          .filter((fl) => fl.serverKey === ship.serverKey)
+                          .map((fl) => (
+                            <option key={fl.id} value={fl.id}>
+                              {fl.name}
+                            </option>
+                          ))}
+                      </select>
+                      <button
+                        disabled={busy || !fleetPick}
+                        onClick={() => void send({ action: "fleet", op: "add", fleetId: Number(fleetPick), id: ship.id }, "Zur Flotte hinzugefügt")}
+                      >
+                        Hinzufügen
+                      </button>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                      <input
+                        placeholder="Name der neuen Flotte"
+                        value={fleetName}
+                        onChange={(event) => setFleetName(event.target.value)}
+                        style={inputStyle}
+                      />
+                      <button
+                        disabled={busy}
+                        onClick={() => {
+                          void send({ action: "fleet", op: "create", id: ship.id, name: fleetName || undefined }, "Flotte gebildet");
+                          setFleetName("");
+                        }}
+                      >
+                        Neue Flotte
+                      </button>
+                    </div>
+                    {ship.fleetId && (
+                      <div className="button-row" style={{ marginBottom: 10 }}>
+                        <button disabled={busy} onClick={() => void send({ action: "fleet", op: "flagship", id: ship.id }, "Flaggschiff gesetzt")}>
+                          Zum Flaggschiff
+                        </button>
+                        <button disabled={busy} onClick={() => void send({ action: "fleet", op: "remove", id: ship.id }, "Aus der Flotte genommen")}>
+                          Aus Flotte nehmen
+                        </button>
+                      </div>
+                    )}
+
+                    {!ship.mapShip && (
+                      <>
+                        <div className="card-label">Moral und Sonderzustände</div>
+                        <p className="subtitle" style={{ margin: "0 0 6px" }}>
+                          Moral {ship.morale ?? "-"} %{ship.surrendered ? (ship.prisoner ? " · gefangen" : " · kapituliert") : ""}
+                          {ship.interdictor ? " · Abfangfeld an" : ""}
+                        </p>
+                        <div className="button-row" style={{ marginBottom: 10 }}>
+                          <button
+                            disabled={busy}
+                            onClick={() =>
+                              void send({ action: "interdict", id: ship.id, on: !ship.interdictor }, ship.interdictor ? "Abfangfeld aus" : "Abfangfeld an")
+                            }
+                          >
+                            Abfangfeld {ship.interdictor ? "aus" : "an"}
+                          </button>
+                          <button
+                            disabled={busy}
+                            onClick={() =>
+                              void send({ action: "surrender", id: ship.id, undo: ship.surrendered }, ship.surrendered ? "Kapitulation aufgehoben" : "Kapituliert")
+                            }
+                          >
+                            {ship.surrendered ? "Kapitulation aufheben" : "Kapitulieren lassen"}
+                          </button>
+                        </div>
+                      </>
+                    )}
+
                     <div className="card-label">Bearbeiten</div>
                     <input
                       value={edit.name}

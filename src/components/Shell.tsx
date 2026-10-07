@@ -22,6 +22,7 @@ const NAV: Array<{ group?: string; items: Array<{ href: string; label: string }>
   {
     group: "Raumflotte",
     items: [
+      { href: "/strategie", label: "Strategieansicht" },
       { href: "/flotte", label: "Flottenkommando" },
       { href: "/raumflotte", label: "Raumflotte: Konfiguration" },
     ],

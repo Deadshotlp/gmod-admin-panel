@@ -61,10 +61,13 @@ export default async function Shell({
   user,
   current,
   children,
+  wide = false,
 }: {
   user: PanelUser;
   current: string;
   children: React.ReactNode;
+  /** volle Breite (z. B. Karten) */
+  wide?: boolean;
 }) {
   const servers = getServers().map((server) => ({
     id: server.id,
@@ -113,7 +116,7 @@ export default async function Shell({
         </div>
       </nav>
 
-      <main className="main">{children}</main>
+      <main className={wide ? "main main-wide" : "main"}>{children}</main>
     </div>
   );
 }

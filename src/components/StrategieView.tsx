@@ -48,6 +48,7 @@ interface LiveShip {
   surrendered?: boolean;
   interdictor?: boolean;
   jump?: { from: string; to: string; eta?: number; total?: number };
+  route?: { pts: number[][]; loop?: boolean; orbit?: { c: number[]; r: number }; jumpTo?: string; slot?: boolean };
 }
 
 interface Live {
@@ -142,6 +143,26 @@ export default function StrategieView({ user }: { user: PanelUser }) {
   const [box, setBox] = useState<null | { x0: number; y0: number; x1: number; y1: number }>(null);
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
   const [factionFilter, setFactionFilter] = useState("");
+  const [showRoutes, setShowRoutes] = useState(true);
+  // Karte füllt die Breite und die Fensterhöhe
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [size, setSize] = useState({ w: 1100, h: 720 });
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const update = () => {
+      const top = el.getBoundingClientRect().top + window.scrollY;
+      setSize({ w: Math.max(400, Math.floor(el.clientWidth)), h: Math.max(480, Math.floor(window.innerHeight - top - 24)) });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    window.addEventListener("resize", update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, []);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const canEdit = user.role === "editor" || user.role === "admin";
@@ -417,6 +438,55 @@ export default function StrategieView({ user }: { user: PanelUser }) {
         ctx.globalAlpha = 1;
         if (b.type !== "moon" || r > 4) ctx.fillText(b.name, x + r + 4, y - 4);
       }
+      // Wegpunkte der Schiffe (Befehle, Patrouille, Orbit, Umwege, Formationsplatz)
+      if (showRoutes) {
+        for (const s of ships) {
+          if (s.systemId !== systemId || !s.route) continue;
+          const sel = selectedIds.includes(s.id);
+          const color = factionColor(s.factionId);
+          ctx.strokeStyle = color;
+          ctx.fillStyle = color;
+          ctx.globalAlpha = sel ? 0.95 : 0.45;
+          ctx.lineWidth = sel ? 1.6 : 1;
+          ctx.setLineDash(s.route.slot ? [2, 4] : [7, 5]);
+          const pts = s.route.pts ?? [];
+          if (pts.length > 0) {
+            ctx.beginPath();
+            let [px, py] = toScreen(s.p[0], s.p[1]);
+            ctx.moveTo(px, py);
+            for (const pt of pts) {
+              [px, py] = toScreen(pt[0], pt[1]);
+              ctx.lineTo(px, py);
+            }
+            if (s.route.loop && pts.length > 1) {
+              const [fx, fy] = toScreen(pts[0][0], pts[0][1]);
+              ctx.lineTo(fx, fy);
+            }
+            ctx.stroke();
+            ctx.setLineDash([]);
+            pts.forEach((pt, i) => {
+              const [x, y] = toScreen(pt[0], pt[1]);
+              ctx.fillRect(x - 3, y - 3, 6, 6);
+              if (sel && pts.length > 1) ctx.fillText(String(i + 1), x + 6, y + 4);
+            });
+          }
+          if (s.route.orbit) {
+            const [ox, oy] = toScreen(s.route.orbit.c[0], s.route.orbit.c[1]);
+            ctx.setLineDash([4, 6]);
+            ctx.beginPath();
+            ctx.arc(ox, oy, Math.max(4, s.route.orbit.r * v.scale), 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          ctx.setLineDash([]);
+          if (s.route.jumpTo) {
+            const [x, y] = toScreen(s.p[0], s.p[1]);
+            ctx.fillText(`→ ${systemsById.get(s.route.jumpTo)?.name ?? s.route.jumpTo}`, x + 12, y + 14);
+          }
+          ctx.globalAlpha = 1;
+          ctx.lineWidth = 1;
+        }
+      }
+
       // Schiffe
       const inSystem = ships.filter((s) => s.systemId === systemId && s.state !== "hyperspace");
       for (const s of inSystem) {
@@ -470,7 +540,7 @@ export default function StrategieView({ user }: { user: PanelUser }) {
       8,
       18,
     );
-  }, [mode, cur.view, stat, ships, bodies, bodiesById, now, selectedIds, systemId, systemsById, factionColor, box]);
+  }, [mode, cur.view, stat, ships, bodies, bodiesById, now, selectedIds, systemId, systemsById, factionColor, box, showRoutes, size]);
 
   /* ---------------------------------------------------------------- */
   /* Maus                                                               */
@@ -652,6 +722,9 @@ export default function StrategieView({ user }: { user: PanelUser }) {
             </option>
           ))}
         </select>
+        <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}>
+          <input type="checkbox" checked={showRoutes} onChange={(e) => setShowRoutes(e.target.checked)} /> Wegpunkte
+        </label>
         {live && (
           <span style={{ color: ALERT[live.alert]?.color ?? "#ccc", fontWeight: 600 }}>{ALERT[live.alert]?.label}</span>
         )}
@@ -665,11 +738,11 @@ export default function StrategieView({ user }: { user: PanelUser }) {
       </div>
 
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
-        <div className="panel" style={{ flex: 3, minWidth: 560, padding: 0, overflow: "hidden" }}>
+        <div ref={wrapRef} className="panel" style={{ flex: 1, minWidth: 560, padding: 0, overflow: "hidden" }}>
           <canvas
             ref={canvasRef}
-            width={1100}
-            height={720}
+            width={size.w}
+            height={size.h}
             style={{ width: "100%", display: "block", cursor: "default" }}
             onContextMenu={(e) => e.preventDefault()}
             onMouseDown={(e) => {
@@ -722,7 +795,7 @@ export default function StrategieView({ user }: { user: PanelUser }) {
           />
         </div>
 
-        <div style={{ flex: 1, minWidth: 320 }}>
+        <div style={{ flex: "0 0 380px", minWidth: 320, maxHeight: size.h, overflowY: "auto" }}>
           <div className="panel" style={{ marginBottom: 12 }}>
             <h3 style={{ marginTop: 0 }}>
               {selected ? `${selected.map ? "★ " : ""}${selected.name}` : selectedIds.length > 1 ? `${selectedIds.length} Schiffe gewählt` : "Schiffe wählen"}

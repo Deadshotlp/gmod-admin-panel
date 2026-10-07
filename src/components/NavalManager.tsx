@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import type { PanelUser } from "@/lib/auth";
 import { Notice, dateFormat, fetchWithTimeout, inputStyle, readJson } from "./ui";
 import NavalTextures from "./NavalTextures";
+import NavalScenarios from "./NavalScenarios";
 
 interface ShipClass {
   id: string;
@@ -53,7 +54,7 @@ interface Data {
   consoles: Array<{ id: number; map: string; station: string; pos: string; locked: boolean }>;
 }
 
-type Tab = "settings" | "classes" | "factions" | "systems" | "textures" | "runtime";
+type Tab = "settings" | "classes" | "factions" | "systems" | "textures" | "scenarios" | "runtime";
 
 const TABS: Array<[Tab, string]> = [
   ["settings", "Einstellungen"],
@@ -61,6 +62,7 @@ const TABS: Array<[Tab, string]> = [
   ["factions", "Fraktionen"],
   ["systems", "Systeme"],
   ["textures", "Planeten-Texturen"],
+  ["scenarios", "Szenarien"],
   ["runtime", "Schiffe & Logbuch"],
 ];
 
@@ -304,6 +306,7 @@ export default function NavalManager({ user }: { user: PanelUser }) {
       )}
 
       {tab === "textures" && <NavalTextures user={user} />}
+      {tab === "scenarios" && <NavalScenarios user={user} />}
       {tab === "runtime" && <RuntimeTab data={data} onReload={() => void load()} />}
     </>
   );

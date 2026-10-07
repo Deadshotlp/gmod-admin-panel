@@ -3,6 +3,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PanelUser } from "@/lib/auth";
 import { Notice, dateFormat, fetchWithTimeout, inputStyle, readJson } from "./ui";
+import NavalTextures from "./NavalTextures";
 
 interface ShipClass {
   id: string;
@@ -52,13 +53,14 @@ interface Data {
   consoles: Array<{ id: number; map: string; station: string; pos: string; locked: boolean }>;
 }
 
-type Tab = "settings" | "classes" | "factions" | "systems" | "runtime";
+type Tab = "settings" | "classes" | "factions" | "systems" | "textures" | "runtime";
 
 const TABS: Array<[Tab, string]> = [
   ["settings", "Einstellungen"],
   ["classes", "Schiffsklassen"],
   ["factions", "Fraktionen"],
   ["systems", "Systeme"],
+  ["textures", "Planeten-Texturen"],
   ["runtime", "Schiffe & Logbuch"],
 ];
 
@@ -301,6 +303,7 @@ export default function NavalManager({ user }: { user: PanelUser }) {
         />
       )}
 
+      {tab === "textures" && <NavalTextures user={user} />}
       {tab === "runtime" && <RuntimeTab data={data} onReload={() => void load()} />}
     </>
   );

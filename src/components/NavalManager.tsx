@@ -104,6 +104,7 @@ const SETTING_INFO: Array<[string, string, string]> = [
   ["shield_mod_cooldown", "Schildmodulation: Sperre nach Fehlversuch", "Sekunden"],
   ["autopilot_clearance", "Autopilot: Sicherheitsabstand", "× Körperradius"],
   ["autopilot_margin", "Autopilot: Sicherheitsabstand zusätzlich", "Meter"],
+  ["ship_inertia", "Trägheit beim Fliegen", "1 = an, 0 = aus"],
   ["sensor_default", "Sensorreichweite (Standard)", "Meter"],
   ["near_ship_range", "Schiffe als Modell bis", "Meter"],
   ["render_scale", "Darstellungsmaßstab", "Meter pro Einheit"],

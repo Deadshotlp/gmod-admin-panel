@@ -102,8 +102,15 @@ export async function GET(request: Request) {
       });
     }
 
+    // Dem Server melden, dass jemand hinschaut: er schreibt die Live-Lage nur
+    // dann (Zeile __viewed__, siehe sv_naval_admintool.lua)
+    await execute(
+      "REPLACE INTO `pd_naval_live` (`server_key`, `updated_at`, `data`) VALUES ('__viewed__', ?, '')",
+      [Math.floor(Date.now() / 1000)],
+    ).catch(() => undefined);
+
     const rows = await query<{ server_key: string; updated_at: number; data: string }>(
-      "SELECT `server_key`, `updated_at`, `data` FROM `pd_naval_live` ORDER BY `updated_at` DESC",
+      "SELECT `server_key`, `updated_at`, `data` FROM `pd_naval_live` WHERE `server_key` <> '__viewed__' ORDER BY `updated_at` DESC",
     ).catch(() => []);
     const live = rows[0] ? { serverKey: rows[0].server_key, updatedAt: Number(rows[0].updated_at), ...parse(rows[0].data, {}) } : null;
 

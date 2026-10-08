@@ -143,7 +143,6 @@ const action = z.discriminatedUnion("type", [
       torpedo: z.number().int().min(0).max(20).optional(),
       missile: z.number().int().min(0).max(20).optional(),
       parts: z.number().int().min(0).max(20).optional(),
-      craft: z.number().int().min(0).max(20).optional(),
     }),
   }),
   z.object({ type: z.literal("log"), delay, text: text(300).min(1) }),

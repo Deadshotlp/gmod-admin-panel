@@ -60,7 +60,7 @@ const NEW_ACTION: Record<string, Action> = {
   announce: { type: "announce", title: "", text: "" },
   alert: { type: "alert", level: 2 },
   damage: { type: "damage", percent: 3 },
-  supply: { type: "supply", crates: { torpedo: 1, missile: 1, parts: 1, craft: 0 } },
+  supply: { type: "supply", crates: { torpedo: 1, missile: 1, parts: 1 } },
   log: { type: "log", text: "" },
 };
 
@@ -250,7 +250,7 @@ function ActionEditor({
     case "supply":
       return (
         <div style={grid}>
-          {[["torpedo", "Torpedokisten"], ["missile", "Raketenkisten"], ["parts", "Ersatzteile"], ["craft", "Ersatzmaschinen"]].map(([key, text]) => (
+          {[["torpedo", "Torpedokisten"], ["missile", "Raketenkisten"], ["parts", "Ersatzteile"]].map(([key, text]) => (
             <Field key={key} label={text}>
               <Num value={action.crates?.[key]} onChange={(v) => set("crates", { ...action.crates, [key]: v })} />
             </Field>

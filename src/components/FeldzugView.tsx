@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createLabeler } from "./mapLabels";
 import { Field, Notice, fetchWithTimeout, inputStyle, readJson } from "./ui";
 
 /* ------------------------------------------------------------------------ */
@@ -556,20 +557,33 @@ function CampaignMap({
         ctx.stroke();
       }
       ctx.lineWidth = 1;
+    }
+
+    // Namen: wichtige zuerst (Auswahl, HQ, Truppen, Systemwert), nur ohne Überlappung
+    const labels = createLabeler(ctx, w, h);
+    const rank = (s: ViewSystem) => (s.id === selected ? 1000 : 0) + (s.hq ? 500 : 0) + (unitsAt.has(s.id) ? 100 : 0) + s.tier * 10;
+    for (const s of [...data.systems].sort((a, b) => rank(b) - rank(a))) {
+      const [x, y] = toScreen(s.x, s.y);
+      const r = 3 + s.tier;
+      if (!labels.place(s.name, x + r + 4, y - 2, regionEdit ? "rgba(223,230,242,0.6)" : "#dfe6f2")) continue;
       const forces = unitsAt.get(s.id);
-      if (view.scale > 0.12 || s.hq || s.id === selected) {
-        ctx.fillStyle = "#dfe6f2";
-        ctx.fillText(s.name, x + r + 4, y - 2);
-        if (forces) {
-          let dx = 0;
-          for (const side of SIDES) {
-            if (!forces[side]) continue;
-            ctx.fillStyle = SIDE_COLOR[side];
-            const label = `${Math.round(forces[side])}`;
-            ctx.fillText(label, x + r + 4 + dx, y + 12);
-            dx += ctx.measureText(label).width + 6;
-          }
-        }
+      if (!forces) continue;
+      let dx = 0;
+      for (const side of SIDES) {
+        if (!forces[side]) continue;
+        const label = `${Math.round(forces[side])}`;
+        labels.place(label, x + r + 4 + dx, y + 12, SIDE_COLOR[side]);
+        dx += ctx.measureText(label).width + 6;
+      }
+    }
+    // Übrige Galaxie blass (im Gebietsmodus die gewählten zuerst)
+    if (regionEdit || view.scale > 0.05) {
+      const rest = galaxy.systems.filter((s) => !campaignIds.has(s.id));
+      if (regionEdit) rest.sort((a, b) => Number(pending.has(b.id)) - Number(pending.has(a.id)));
+      for (const s of rest) {
+        const [x, y] = toScreen(s.x, s.y);
+        if (x < -5 || x > w + 5 || y < -5 || y > h + 5) continue;
+        labels.place(s.name, x + 4, y - 2, regionEdit && pending.has(s.id) ? "rgba(240,200,80,0.85)" : "rgba(150,160,180,0.55)");
       }
     }
 

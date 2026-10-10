@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PanelUser } from "@/lib/auth";
+import { createLabeler } from "./mapLabels";
 import { Notice, fetchWithTimeout, inputStyle, readJson } from "./ui";
 
 /* ------------------------------------------------------------------------ */
@@ -471,7 +472,6 @@ export default function StrategieView({ user }: { user: PanelUser }) {
             const f = territory.byId.get(sys.id);
             ctx.fillStyle = f ? factionColor(f) : "rgba(150,160,180,0.6)";
             ctx.fillRect(x - 2, y - 2, 4, 4);
-            if (v.scale > 0.6) ctx.fillText(sys.name, x + 5, y - 3);
           }
         }
       }
@@ -498,7 +498,8 @@ export default function StrategieView({ user }: { user: PanelUser }) {
           if (x > -5 && x < w + 5 && y > -5 && y < h + 5) ctx.fillRect(x - 1, y - 1, 2, 2);
         }
       }
-      // Systeme mit Schiffen
+      // Systeme mit Schiffen (Namen immer, die übrigen danach nur ohne Überlappung)
+      const labels = createLabeler(ctx, w, h);
       const bySystem = new Map<string, LiveShip[]>();
       for (const s of ships) {
         if (s.state === "hyperspace") continue;
@@ -522,11 +523,20 @@ export default function StrategieView({ user }: { user: PanelUser }) {
         }
         const hasMap = list.some((s) => s.map);
         ctx.fillStyle = hasMap ? "#5ad282" : "#dfe6f0";
-        ctx.fillText(`${sys.name} (${list.length})`, x + 12 + i * 9, y + 4);
+        const shipLabel = `${sys.name} (${list.length})`;
+        ctx.fillText(shipLabel, x + 12 + i * 9, y + 4);
+        labels.reserve(x - 12, y - 12, x + 12 + i * 9 + ctx.measureText(shipLabel).width, y + 12);
         if (sid === systemId) {
           ctx.strokeStyle = "#f0c83c";
           ctx.strokeRect(x - 12, y - 12, 24, 24);
         }
+      }
+      // Namen aller übrigen Systeme (wo auch die Punkte zu sehen sind)
+      for (const sys of v.scale > 0.15 || (terrEdit && showTerritory && v.scale > 0.08) ? stat.systems : []) {
+        if (bySystem.has(sys.id)) continue;
+        const [x, y] = toScreen(sys.x, sys.y);
+        if (x < -5 || x > w + 5 || y < -5 || y > h + 5) continue;
+        labels.place(sys.name, x + 4, y - 3, "rgba(170,180,200,0.7)");
       }
       // Sprünge
       for (const s of ships) {

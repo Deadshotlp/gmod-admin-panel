@@ -7,7 +7,7 @@
  * eigene Einheiten stehen. Geplante Züge der Gegenseite nie.
  */
 
-import type { CampaignState } from "./db";
+import type { CampaignState, Intel } from "./db";
 import { hopCost } from "./routing";
 import { KNOWN_TRAITS, SIDES } from "./types";
 import type { CampaignSystem, Side, Unit, UnitType } from "./types";
@@ -111,6 +111,14 @@ export function checkSell(state: CampaignState, side: Side, unit: Unit | undefin
 
 export type Viewer = { kind: "admin" } | { kind: "side"; side: Side };
 
+/** Was eine Seite über ein System weiß */
+export interface Knowledge {
+  owner: Side | null;
+  /** sicht = jetzt eingesehen, bericht = früher gesehen/aufgeklärt, annahme = abgeleitet */
+  source: "sicht" | "bericht" | "annahme";
+  turn: number;
+}
+
 export interface ViewSystem {
   id: string;
   name: string;
@@ -125,6 +133,8 @@ export interface ViewSystem {
   hq: Side | null;
   /** Für die Seite: in Reichweite eines eigenen Systems (Besetzen möglich) */
   reachable: boolean;
+  /** Lagebild der Seite (Frontlinie); bei der Spielleitung die Wahrheit */
+  known: Knowledge | null;
 }
 
 export interface ViewUnit extends Unit {
@@ -133,21 +143,105 @@ export interface ViewUnit extends Unit {
   men: number;
 }
 
-export function viewFor(state: CampaignState, viewer: Viewer, types: Map<string, UnitType>) {
+/** Systeme, die eine Seite gerade einsieht (eigene, Nachbarn bis supplyHop, Orte eigener Truppen) */
+export function visibleSystems(state: CampaignState, side: Side): Set<string> {
+  const max = state.campaign.settings.supplyHop;
+  const out = new Set<string>();
+  for (const s of state.systems.values()) {
+    if (s.owner !== side) continue;
+    out.add(s.id);
+    for (const [n, w] of state.graph[s.id] ?? []) if (w <= max) out.add(n);
+  }
+  for (const u of state.units) if (u.side === side) out.add(u.systemId);
+  return out;
+}
+
+/** Kürzeste Wege vom Startsystem (Vorgänger je System), Sprünge bis maxStep */
+function shortestTree(state: CampaignState, from: string, maxStep: number): Map<string, string> {
+  const dist = new Map<string, number>([[from, 0]]);
+  const prev = new Map<string, string>();
+  const open: Array<[string, number]> = [[from, 0]];
+  const done = new Set<string>();
+  while (open.length > 0) {
+    // kleine Gebiete: lineare Suche reicht
+    let bi = 0;
+    for (let i = 1; i < open.length; i++) if (open[i][1] < open[bi][1]) bi = i;
+    const [id, d] = open.splice(bi, 1)[0];
+    if (done.has(id)) continue;
+    done.add(id);
+    for (const [n, w] of state.graph[id] ?? []) {
+      if (w > maxStep || !state.systems.has(n)) continue;
+      const nd = d + w;
+      if (nd < (dist.get(n) ?? Infinity)) {
+        dist.set(n, nd);
+        prev.set(n, id);
+        open.push([n, nd]);
+      }
+    }
+  }
+  return prev;
+}
+
+/**
+ * Lagebild einer Seite: Sicht und Berichte, dazu die Annahme, dass alle
+ * Systeme auf dem Weg vom gegnerischen HQ zu einer bestätigt feindlichen
+ * Welt ebenfalls feindlich sind (sonst entstünden Scheininseln in der
+ * Frontlinie).
+ */
+export function knowledgeFor(state: CampaignState, side: Side, intel: Intel): Map<string, Knowledge> {
+  const c = state.campaign;
+  const out = new Map<string, Knowledge>();
+  const visible = visibleSystems(state, side);
+  for (const s of state.systems.values()) {
+    if (visible.has(s.id)) out.set(s.id, { owner: s.owner, source: "sicht", turn: c.turn });
+    else {
+      const i = intel.get(s.id);
+      if (i) out.set(s.id, { owner: i.owner, source: "bericht", turn: i.turn });
+    }
+  }
+
+  const enemy = otherSide(side);
+  const enemyHq = c.hq[enemy];
+  if (!enemyHq || !state.systems.has(enemyHq)) return out;
+  if (!out.has(enemyHq)) out.set(enemyHq, { owner: enemy, source: "annahme", turn: c.turn });
+
+  const confirmed = [...out.entries()].filter(([, k]) => k.owner === enemy && k.source !== "annahme").map(([id]) => id);
+  if (confirmed.length === 0) return out;
+  // Erst entlang der Nachschubweite, sonst über beliebige Sprünge
+  const near = shortestTree(state, enemyHq, c.settings.supplyHop);
+  const far = shortestTree(state, enemyHq, Infinity);
+  for (const target of confirmed) {
+    const prev = near.has(target) ? near : far;
+    let id = prev.get(target);
+    let guard = 0;
+    while (id && id !== enemyHq && guard++ < 500) {
+      if (!out.has(id)) out.set(id, { owner: enemy, source: "annahme", turn: c.turn });
+      id = prev.get(id);
+    }
+  }
+  return out;
+}
+
+export function viewFor(state: CampaignState, viewer: Viewer, types: Map<string, UnitType>, intel?: Intel) {
   const c = state.campaign;
   const own = viewer.kind === "side" ? viewer.side : null;
   const max = c.settings.supplyHop;
 
-  // Systeme mit eigenen Einheiten (dort sieht man auch den Gegner)
-  const presence = new Set<string>();
-  if (own) for (const u of state.units) if (u.side === own) presence.add(u.systemId);
-
-  const ownedIds = own ? [...state.systems.values()].filter((s) => s.owner === own).map((s) => s.id) : [];
-  const near = new Set<string>(ownedIds);
-  for (const id of ownedIds) for (const [n, w] of state.graph[id] ?? []) if (w <= max) near.add(n);
+  const visible = own ? visibleSystems(state, own) : null;
+  const presence = new Set(state.units.filter((u) => u.side === own).map((u) => u.systemId));
+  // Besetzbar: neutral und in Reichweite eines eigenen Systems
+  const near = new Set<string>();
+  if (own) {
+    for (const s of state.systems.values()) {
+      if (s.owner !== own) continue;
+      for (const [n, w] of state.graph[s.id] ?? []) if (w <= max) near.add(n);
+    }
+  }
+  const knowledge = own ? knowledgeFor(state, own, intel ?? new Map()) : null;
 
   const systems: ViewSystem[] = [...state.systems.values()].map((s) => {
-    const visible = !own || near.has(s.id) || presence.has(s.id);
+    const seen = !visible || visible.has(s.id);
+    // Hauptquartiere beider Seiten sind bekannt
     const hq = SIDES.find((side) => c.hq[side] === s.id) ?? null;
     return {
       id: s.id,
@@ -156,11 +250,12 @@ export function viewFor(state: CampaignState, viewer: Viewer, types: Map<string,
       y: s.y,
       tier: s.tier,
       traits: s.traits,
-      owner: visible ? s.owner : "?",
+      owner: seen ? s.owner : "?",
       fort: !own || s.owner === own ? s.fort : null,
-      contested: visible && s.contested,
-      hq: hq && (!own || hq === own || visible) ? hq : null,
+      contested: seen && s.contested,
+      hq,
       reachable: !!own && !s.owner && near.has(s.id),
+      known: knowledge ? knowledge.get(s.id) ?? null : { owner: s.owner, source: "sicht", turn: c.turn },
     };
   });
 

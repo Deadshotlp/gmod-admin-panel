@@ -114,6 +114,14 @@ const TABLES = [
     PRIMARY KEY (\`id\`),
     KEY \`campaign\` (\`campaign_id\`, \`side\`)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS \`pd_fz_intel\` (
+    \`campaign_id\` INT UNSIGNED NOT NULL,
+    \`side\` VARCHAR(16) NOT NULL,
+    \`system_id\` VARCHAR(64) NOT NULL,
+    \`owner\` VARCHAR(16) NOT NULL DEFAULT '',
+    \`turn\` INT NOT NULL DEFAULT 0,
+    PRIMARY KEY (\`campaign_id\`, \`side\`, \`system_id\`)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 ];
 
 export async function ensureFeldzugTables(): Promise<void> {
@@ -346,7 +354,7 @@ export async function loadReports(id: number, side: Side | null, limit = 60) {
 }
 
 export async function deleteCampaign(id: number): Promise<void> {
-  for (const t of ["pd_fz_systems", "pd_fz_units", "pd_fz_commanders", "pd_fz_orders", "pd_fz_battles", "pd_fz_reports"]) {
+  for (const t of ["pd_fz_intel", "pd_fz_systems", "pd_fz_units", "pd_fz_commanders", "pd_fz_orders", "pd_fz_battles", "pd_fz_reports"]) {
     await execute(`DELETE FROM \`${t}\` WHERE \`campaign_id\` = ?`, [id]);
   }
   await execute("DELETE FROM `pd_fz_campaigns` WHERE `id` = ?", [id]);
@@ -435,4 +443,28 @@ export async function saveBattle(b: Battle): Promise<void> {
     "UPDATE `pd_fz_battles` SET `kind` = ?, `mode` = ?, `status` = ?, `result_json` = ?, `scheduled_at` = ? WHERE `id` = ?",
     [b.kind, b.mode, b.status, JSON.stringify(b.result), b.scheduledAt, b.id],
   );
+}
+
+/* -------------------------------------------------------------------- */
+/* Aufklärungsstand je Seite (zuletzt gesehener Besitzer)                */
+/* -------------------------------------------------------------------- */
+
+export type Intel = Map<string, { owner: Side | null; turn: number }>;
+
+export async function loadIntel(id: number, side: Side): Promise<Intel> {
+  const rows = await query<{ system_id: string; owner: string; turn: number }>(
+    "SELECT `system_id`, `owner`, `turn` FROM `pd_fz_intel` WHERE `campaign_id` = ? AND `side` = ?",
+    [id, side],
+  );
+  return new Map(rows.map((r) => [r.system_id, { owner: r.owner ? (r.owner as Side) : null, turn: Number(r.turn) }]));
+}
+
+export async function saveIntel(id: number, side: Side, rows: Array<{ systemId: string; owner: Side | null; turn: number }>): Promise<void> {
+  for (let i = 0; i < rows.length; i += 200) {
+    const chunk = rows.slice(i, i + 200);
+    await execute(
+      "REPLACE INTO `pd_fz_intel` (`campaign_id`, `side`, `system_id`, `owner`, `turn`) VALUES " + chunk.map(() => "(?, ?, ?, ?, ?)").join(", "),
+      chunk.flatMap((r) => [id, side, r.systemId, r.owner ?? "", r.turn]),
+    );
+  }
 }

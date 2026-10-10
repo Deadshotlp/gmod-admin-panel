@@ -26,8 +26,11 @@ import {
   saveOrder,
   deleteOrder,
   loadBattles,
+  loadIntel,
 } from "@/lib/feldzug/db";
-import { incomeOf, orderCost, resolveTurn, suppliedSystems, validateOrder } from "@/lib/feldzug/turn";
+import type { Order } from "@/lib/feldzug/db";
+import { incomeOf, orderCost, recordIntel, resolveTurn, suppliedSystems, validateOrder } from "@/lib/feldzug/turn";
+import { visibleSystems } from "@/lib/feldzug/rules";
 import type { CampaignState } from "@/lib/feldzug/db";
 import { buildHopGraph } from "@/lib/feldzug/routing";
 import type { RouteLine } from "@/lib/feldzug/routing";
@@ -110,11 +113,23 @@ function maxHopOf(settings: Settings, types: UnitType[]) {
   return Math.max(settings.supplyHop, ...types.filter((t) => t.category === "ship").map((t) => t.speed));
 }
 
+/** Kennung der Netzberechnung; ältere Netze werden beim Laden neu berechnet */
+const GRAPH_VERSION = "_v2";
+
 async function rebuildGraph(state: CampaignState, types: UnitType[]) {
   const galaxy = await loadGalaxy();
   const points = [...state.systems.values()].map((s) => ({ id: s.id, x: s.x, y: s.y }));
   const graph = buildHopGraph(points, galaxy.routes, state.campaign.settings, maxHopOf(state.campaign.settings, types));
+  graph[GRAPH_VERSION] = [];
   await saveGraph(state.campaign.id, graph);
+  state.graph = graph;
+}
+
+/** Feldzug laden; veraltetes Sprungnetz (vor Inselverbindung) neu berechnen */
+async function loadCurrent(id: number, types: UnitType[]): Promise<CampaignState | null> {
+  const state = await loadState(id);
+  if (state && state.systems.size > 1 && !state.graph[GRAPH_VERSION]) await rebuildGraph(state, types);
+  return state;
 }
 
 /* -------------------------------------------------------------------- */
@@ -151,11 +166,12 @@ export async function GET(request: Request) {
       });
     }
 
-    const state = await loadState(Number(idParam));
+    const state = await loadCurrent(Number(idParam), types);
     if (!state) return NextResponse.json({ error: "Feldzug nicht gefunden" }, { status: 404 });
     const viewer = viewerOf(user, state);
     const typeMap = new Map(types.map((t) => [t.key, t]));
-    const view = viewFor(state, viewer, typeMap);
+    const intel = viewer.kind === "side" ? await loadIntel(state.campaign.id, viewer.side) : undefined;
+    const view = viewFor(state, viewer, typeMap, intel);
 
     // Namen der Kommandeure (nur die sichtbaren Seiten)
     const names = new Map<string, string>();
@@ -316,11 +332,11 @@ export async function POST(request: Request) {
 
 async function runCampaignOp(user: PanelUser, input: Input, requireAdmin: () => void): Promise<string> {
   if (!("id" in input)) return "";
-  const state = await loadState(input.id);
+  const types = await loadUnitTypes();
+  const state = await loadCurrent(input.id, types);
   if (!state) throw new RuleError("Feldzug nicht gefunden");
   const c = state.campaign;
   const viewer = viewerOf(user, state);
-  const types = await loadUnitTypes();
   const typeMap = new Map(types.map((t) => [t.key, t]));
 
   /** Seite des Befehls: Kommandeur = eigene Seite, Spielleitung = angegebene */
@@ -532,7 +548,10 @@ async function runCampaignOp(user: PanelUser, input: Input, requireAdmin: () => 
       c.turn = 1;
       c.ready = { republik: false, kus: false };
       await updateCampaign(c);
-      for (const side of SIDES) await addReport(c.id, 1, side, "turn", "Der Feldzug beginnt. Zug 1.");
+      for (const side of SIDES) {
+        await addReport(c.id, 1, side, "turn", "Der Feldzug beginnt. Zug 1.");
+        await recordIntel(state, side, visibleSystems(state, side), 1);
+      }
       await audit("start", { turn: 1 });
       return "Feldzug gestartet - Zug 1";
     }
@@ -540,15 +559,41 @@ async function runCampaignOp(user: PanelUser, input: Input, requireAdmin: () => 
     case "order": {
       const side = sideFor(input.side);
       const existing = await loadOrders(c.id, c.turn, side);
-      const others = existing.filter((o) => o.slot !== input.slot);
+      let others = existing.filter((o) => o.slot !== input.slot);
       let slot = input.slot;
+      // Umleiten: gewählte Einheiten verlassen ihren bisherigen Bewegungsbefehl.
+      // Ein Befehl, der dabei leer wird, wird ersetzt (sein Platz wird frei).
+      const changed: Order[] = [];
+      const freed: number[] = [];
+      if (input.order.kind === "move" && input.order.unitIds?.length) {
+        const moving = new Set(input.order.unitIds);
+        const kept: Order[] = [];
+        for (const o of others) {
+          const ids = (o.data.unitIds as number[] | undefined) ?? [];
+          if (o.kind !== "move" || !ids.some((id) => moving.has(id))) {
+            kept.push(o);
+            continue;
+          }
+          const rest = ids.filter((id) => !moving.has(id));
+          if (rest.length === 0) freed.push(o.slot);
+          else {
+            const n = { ...o, data: { ...o.data, unitIds: rest, label: `${rest.length} Einheit(en) ${String(o.data.label ?? "").replace(/^d+ Einheit(en) /, "")}` } };
+            changed.push(n);
+            kept.push(n);
+          }
+        }
+        others = kept;
+        if (!slot && freed.length > 0) slot = Math.min(...freed);
+      }
       if (!slot) {
-        const used = new Set(existing.map((o) => o.slot));
+        const used = new Set(others.map((o) => o.slot));
         slot = 1;
         while (used.has(slot)) slot++;
       }
       if (slot > c.settings.actionsPerTurn) throw new RuleError(`Nur ${c.settings.actionsPerTurn} Aktionen je Zug`);
       const v = validateOrder(state, side, input.order, others, typeMap);
+      for (const o of changed) await saveOrder(c.id, c.turn, o);
+      for (const fs of freed) if (fs !== slot) await deleteOrder(c.id, c.turn, side, fs);
       await saveOrder(c.id, c.turn, { side, slot, kind: v.kind, data: { ...v.data, label: v.label }, result: "" });
       if (c.ready[side]) {
         c.ready[side] = false;

@@ -205,7 +205,59 @@ export function buildHopGraph(systems: SystemPoint[], routes: RouteLine[], setti
     list.sort((a, b) => a[1] - b[1]);
     graph[from.id] = list;
   }
+  connectIslands(systems, graph);
   return graph;
+}
+
+/**
+ * Inseln verbinden: Teile des Gebiets, die über maxHop nicht zusammenhängen,
+ * bekommen je einen direkten Sprung zum nächsten System außerhalb (Borůvka).
+ * So ist jedes System erreichbar; für den Nachschub zählen diese langen
+ * Sprünge nicht, weil sie über supplyHop liegen.
+ */
+function connectIslands(systems: SystemPoint[], graph: HopGraph) {
+  const index = new Map(systems.map((s, i) => [s.id, i]));
+  for (let round = 0; round < 64; round++) {
+    const comp = new Int32Array(systems.length).fill(-1);
+    let count = 0;
+    for (let i = 0; i < systems.length; i++) {
+      if (comp[i] >= 0) continue;
+      const stack = [i];
+      comp[i] = count;
+      while (stack.length > 0) {
+        const k = stack.pop()!;
+        for (const [n] of graph[systems[k].id] ?? []) {
+          const j = index.get(n);
+          if (j !== undefined && comp[j] < 0) {
+            comp[j] = count;
+            stack.push(j);
+          }
+        }
+      }
+      count++;
+    }
+    if (count <= 1) return;
+
+    // Je Insel die kürzeste Verbindung nach draußen
+    const best: Array<[number, number, number]> = Array.from({ length: count }, () => [Infinity, -1, -1]);
+    for (let i = 0; i < systems.length; i++) {
+      for (let j = i + 1; j < systems.length; j++) {
+        if (comp[i] === comp[j]) continue;
+        const d = dist(systems[i].x, systems[i].y, systems[j].x, systems[j].y);
+        if (d < best[comp[i]][0]) best[comp[i]] = [d, i, j];
+        if (d < best[comp[j]][0]) best[comp[j]] = [d, i, j];
+      }
+    }
+    for (const [, i, j] of best) {
+      if (i < 0) continue;
+      const a = systems[i].id;
+      const b = systems[j].id;
+      if ((graph[a] ?? []).some(([n]) => n === b)) continue;
+      const cost = Math.round(dist(systems[i].x, systems[i].y, systems[j].x, systems[j].y) * 10) / 10;
+      (graph[a] ??= []).push([b, cost]);
+      (graph[b] ??= []).push([a, cost]);
+    }
+  }
 }
 
 /** Kosten eines Sprungs (Infinity, wenn außerhalb des Netzes) */
@@ -218,26 +270,34 @@ export function hopCost(graph: HopGraph, from: string, to: string): number {
 /** Günstigster Weg über mehrere Sprünge (je Sprung höchstens maxStep) */
 export function pathCost(graph: HopGraph, from: string, to: string, maxStep: number): { cost: number; path: string[] } | null {
   if (from === to) return { cost: 0, path: [from] };
-  const best = new Map<string, number>([[from, 0]]);
-  const prev = new Map<string, string>();
-  const open: Array<[string, number]> = [[from, 0]];
-  while (open.length > 0) {
-    open.sort((a, b) => a[1] - b[1]);
-    const [id, c] = open.shift()!;
-    if (id === to) break;
-    if (c > (best.get(id) ?? Infinity)) continue;
-    for (const [n, w] of graph[id] ?? []) {
+  const ids = Object.keys(graph);
+  const index = new Map(ids.map((id, i) => [id, i]));
+  const start = index.get(from);
+  const goal = index.get(to);
+  if (start === undefined || goal === undefined) return null;
+  const best = new Float64Array(ids.length).fill(Infinity);
+  const prev = new Int32Array(ids.length).fill(-1);
+  const heap = new Heap();
+  best[start] = 0;
+  heap.push(start, 0);
+  while (heap.size > 0) {
+    const [i, c] = heap.pop();
+    if (c > best[i]) continue;
+    if (i === goal) break;
+    for (const [n, w] of graph[ids[i]]) {
       if (w > maxStep) continue;
+      const j = index.get(n);
+      if (j === undefined) continue;
       const nc = c + w;
-      if (nc < (best.get(n) ?? Infinity)) {
-        best.set(n, nc);
-        prev.set(n, id);
-        open.push([n, nc]);
+      if (nc < best[j]) {
+        best[j] = nc;
+        prev[j] = i;
+        heap.push(j, nc);
       }
     }
   }
-  if (!best.has(to)) return null;
+  if (best[goal] === Infinity) return null;
   const path = [to];
-  while (path[0] !== from) path.unshift(prev.get(path[0])!);
-  return { cost: best.get(to)!, path };
+  for (let k = prev[goal]; k >= 0; k = prev[k]) path.unshift(ids[k]);
+  return { cost: best[goal], path };
 }

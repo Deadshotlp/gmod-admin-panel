@@ -2,10 +2,10 @@
  * Galaktischer Feldzug - Befehle und Zugauswertung (Paket 2).
  *
  * Jede Seite plant bis zu actionsPerTurn Befehle:
- *   move     Einheiten verlegen. Schiffe springen entlang des Sprungnetzes
- *            (Gesamtkosten bis zum Tempo des langsamsten Schiffs) und nehmen
- *            Bodentruppen mit (je Kompanie 1 Laderaum). Bodentruppen allein
- *            nur in ein eigenes System innerhalb der Nachschubweite.
+ *   move     Einheiten verlegen. Jedes Ziel ist in einem Zug erreichbar;
+ *            die Route folgt dem Sprungnetz (gespeichert für die Karte).
+ *            Schiffe nehmen Bodentruppen mit (je Kompanie 1 Laderaum),
+ *            Bodentruppen allein nur in eigene Systeme.
  *   build    Einheiten bauen/ausbilden (fertig nach buildTurns Zügen)
  *   fortify  Befestigung +1
  *   scout    Aufklärung eines Systems (Bericht)
@@ -25,12 +25,13 @@ import {
   loadBattles,
   saveOrder,
   saveSystem,
+  saveIntel,
   saveUnit,
   updateCampaign,
 } from "./db";
 import type { CampaignState, Order, OrderKind } from "./db";
 import { hopCost, pathCost } from "./routing";
-import { RuleError, canBuildAt, connectedToSide, occupyCost, otherSide } from "./rules";
+import { RuleError, canBuildAt, connectedToSide, occupyCost, otherSide, visibleSystems } from "./rules";
 import { SIDES, SIDE_NAME } from "./types";
 import type { CampaignSystem, Side, Unit, UnitType } from "./types";
 
@@ -107,22 +108,20 @@ export function validateOrder(
         if (left.length === 0) throw new RuleError("Mindestens eine Bodeneinheit bleibt als Garnison zurück");
       }
 
-      let cost: number;
       if (ships.length > 0) {
-        const speed = Math.min(...ships.map((u) => types.get(u.type)?.speed ?? 0));
         const capacity = ships.reduce((a, u) => a + (types.get(u.type)?.capacity ?? 0), 0);
         if (ground.length > capacity) throw new RuleError(`Zu wenig Laderaum (${capacity} Kompanien, ${ground.length} gewählt)`);
-        const path = pathCost(state.graph, from.id, to.id, Infinity);
-        if (!path) throw new RuleError("Kein Weg dorthin im Sprungnetz");
-        if (path.cost > speed) throw new RuleError(`Zu weit: ${Math.round(path.cost)} pc, Tempo ${speed} pc je Zug`);
-        cost = path.cost;
-      } else {
-        if (to.owner !== side) throw new RuleError("Bodentruppen ohne Schiffe nur in eigene Systeme (für Angriffe Schiffe mitschicken)");
-        cost = hopCost(state.graph, from.id, to.id);
-        if (cost > c.settings.supplyHop) throw new RuleError("Zu weit für Bodentruppen ohne Schiffe");
+      } else if (to.owner !== side) {
+        throw new RuleError("Bodentruppen ohne Schiffe nur in eigene Systeme (für Angriffe Schiffe mitschicken)");
       }
+      // Route über das Sprungnetz; ohne Verbindung direkter Sprung
+      const route = pathCost(state.graph, from.id, to.id, Infinity) ?? { cost: Math.hypot(to.x - from.x, to.y - from.y), path: [from.id, to.id] };
       const label = `${units.length} Einheit(en) ${from.name} → ${to.name}`;
-      return { kind: "move", data: { systemId: from.id, to: to.id, unitIds: ids, distance: Math.round(cost), cost: 0 }, label };
+      return {
+        kind: "move",
+        data: { systemId: from.id, to: to.id, unitIds: ids, distance: Math.round(route.cost), path: route.path, cost: 0 },
+        label,
+      };
     }
 
     case "build": {
@@ -391,6 +390,13 @@ export async function resolveTurn(state: CampaignState, orders: Order[], types: 
     );
   }
 
+  // Aufklärungsstand: was jede Seite jetzt sieht, dazu die aufgeklärten Systeme
+  for (const side of SIDES) {
+    const ids = visibleSystems(state, side);
+    for (const o of orders) if (o.kind === "scout" && o.side === side) ids.add(String(o.data.systemId));
+    await recordIntel(state, side, ids, next);
+  }
+
   // Speichern
   for (const id of changedSystems) await saveSystem(c.id, state.systems.get(id)!);
   for (const id of changedUnits) {
@@ -406,4 +412,13 @@ export async function resolveTurn(state: CampaignState, orders: Order[], types: 
     await addReport(c.id, next, side, "turn", `Zug ${next} beginnt. ${c.points[side].toLocaleString("de-DE")} Punkte verfügbar.`);
   }
   return notes;
+}
+
+/** Besitzer der angegebenen Systeme als Aufklärungsstand der Seite speichern */
+export async function recordIntel(state: CampaignState, side: Side, ids: Set<string>, turn: number): Promise<void> {
+  const rows = [...ids]
+    .map((id) => state.systems.get(id))
+    .filter((s): s is CampaignSystem => !!s)
+    .map((s) => ({ systemId: s.id, owner: s.owner, turn }));
+  await saveIntel(state.campaign.id, side, rows);
 }

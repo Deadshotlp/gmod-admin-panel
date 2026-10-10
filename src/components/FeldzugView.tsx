@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { influenceGrid } from "./influenceGrid";
 import { createLabeler } from "./mapLabels";
 import { Field, Notice, fetchWithTimeout, inputStyle, readJson } from "./ui";
 
@@ -95,6 +96,7 @@ interface ViewSystem {
   contested: boolean;
   hq: Side | null;
   reachable: boolean;
+  known: { owner: Side | null; source: "sicht" | "bericht" | "annahme"; turn: number } | null;
 }
 
 interface ViewUnit {
@@ -127,7 +129,7 @@ interface Order {
   side: Side;
   slot: number;
   kind: string;
-  data: { systemId?: string; to?: string; unitIds?: number[]; label?: string; cost?: number; distance?: number };
+  data: { systemId?: string; to?: string; unitIds?: number[]; label?: string; cost?: number; distance?: number; path?: string[] };
   result: string;
 }
 
@@ -148,8 +150,8 @@ export default function FeldzugView() {
   const [selected, setSelected] = useState<string | null>(null);
   // Spielleitung handelt für eine Seite
   const [actAs, setActAs] = useState<Side>("republik");
-  // Bewegung: nach Auswahl der Einheiten Ziel auf der Karte anklicken
-  const [movePick, setMovePick] = useState<null | { from: string; unitIds: number[] }>(null);
+  // Gewählte Einheiten (Rechtsklick aufs Ziel = Bewegungsbefehl)
+  const [selectedUnits, setSelectedUnits] = useState<number[]>([]);
 
   const loadList = useCallback(async () => {
     const { data: d, error } = await readJson<ListData>(await fetchWithTimeout("/api/feldzug", { cache: "no-store" }));
@@ -210,15 +212,21 @@ export default function FeldzugView() {
     for (const o of data?.orders ?? []) if (o.kind === "move") for (const id of o.data.unitIds ?? []) set.add(id);
     return set;
   }, [data]);
-  const selectSystem = (id: string | null) => {
-    if (movePick && id) {
-      const pick = movePick;
-      setMovePick(null);
-      if (id !== pick.from) void op("order", { order: { kind: "move", systemId: pick.from, to: id, unitIds: pick.unitIds } });
-      return;
+  /** Gewählte Einheiten zum Ziel: je Ausgangssystem ein Befehl */
+  const moveTo = async (target: string) => {
+    const byFrom = new Map<string, number[]>();
+    for (const u of data?.units ?? []) {
+      if (!selectedUnits.includes(u.id) || u.systemId === target) continue;
+      byFrom.set(u.systemId, [...(byFrom.get(u.systemId) ?? []), u.id]);
     }
-    setSelected(id);
+    for (const [from, unitIds] of byFrom) await op("order", { order: { kind: "move", systemId: from, to: target, unitIds } });
   };
+  // Nach dem Neuladen nur noch vorhandene Einheiten gewählt lassen
+  useEffect(() => {
+    if (!data) return;
+    const ids = new Set(data.units.map((u) => u.id));
+    setSelectedUnits((cur) => (cur.every((id) => ids.has(id)) ? cur : cur.filter((id) => ids.has(id))));
+  }, [data]);
 
   const refresh = () => {
     if (campaignId != null) void loadCampaign(campaignId);
@@ -316,7 +324,10 @@ export default function FeldzugView() {
               {tab === "karte" && (setup || running) && (
                 <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}>
                   Handeln als
-                  <select value={actAs} onChange={(e) => setActAs(e.target.value as Side)} style={{ ...inputStyle, width: 140 }}>
+                  <select value={actAs} onChange={(e) => {
+                    setActAs(e.target.value as Side);
+                    setSelectedUnits([]);
+                  }} style={{ ...inputStyle, width: 140 }}>
                     {SIDES.map((s) => <option key={s} value={s}>{SIDE_NAME[s]}</option>)}
                   </select>
                 </label>
@@ -330,16 +341,19 @@ export default function FeldzugView() {
               data={data}
               regionEdit={lead && tab === "gebiet" && setup}
               selected={selected}
-              onSelect={selectSystem}
+              onSelect={setSelected}
               busy={busy}
-              hint={movePick ? `Ziel für ${movePick.unitIds.length} Einheit(en) auf der Karte anklicken (Esc: abbrechen)` : null}
-              onCancel={() => setMovePick(null)}
-              arrows={(data.orders ?? []).filter((o) => o.kind === "move" && (!mySide || o.side === mySide)).map((o) => ({ from: o.data.systemId ?? "", to: o.data.to ?? "", side: o.side }))}
+              commandSide={(lead || mySide) && running ? actSide : null}
+              selectedUnits={selectedUnits}
+              onSelectUnits={setSelectedUnits}
+              onMoveOrder={(target) => void moveTo(target)}
               supplied={running ? new Set(SIDES.flatMap((x) => data.supply[x]?.ids ?? [])) : null}
               onRegion={(ids) => void post({ op: "setRegion", id: campaignId, systemIds: ids }, refresh)}
               sidebar={
                 lead && tab === "gebiet" ? (
                   <HqPanel data={data} selected={selected} busy={busy} onHq={(side, systemId) => void post({ op: "setHq", id: campaignId, side, systemId }, refresh)} />
+                ) : selectedUnits.length > 0 ? (
+                  <SelectionPanel data={data} selectedUnits={selectedUnits} busy={busy} op={op} onSelectUnits={setSelectedUnits} />
                 ) : (
                   <SystemPanel
                     data={data}
@@ -349,7 +363,7 @@ export default function FeldzugView() {
                     busy={busy}
                     op={op}
                     planned={planned}
-                    onMove={(from, unitIds) => setMovePick({ from, unitIds })}
+                    onSelectUnits={setSelectedUnits}
                   />
                 )
               }
@@ -429,6 +443,21 @@ interface ViewState {
   scale: number;
 }
 
+const CATEGORY_GLYPH: Record<string, string> = { infantry: "I", heavy: "S", armor: "P", artillery: "A" };
+
+/** Einheitensymbol über einem System (Treffer-Fläche für die Maus) */
+interface Chip {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  systemId: string;
+  side: Side;
+  ids: number[];
+  /** gehört der befehlenden Seite und ist nicht in Ausbildung */
+  own: boolean;
+}
+
 function CampaignMap({
   galaxy,
   data,
@@ -438,9 +467,10 @@ function CampaignMap({
   onRegion,
   busy,
   sidebar,
-  hint,
-  onCancel,
-  arrows,
+  commandSide,
+  selectedUnits,
+  onSelectUnits,
+  onMoveOrder,
   supplied,
 }: {
   galaxy: Galaxy;
@@ -451,32 +481,40 @@ function CampaignMap({
   onRegion: (ids: string[]) => void;
   busy: boolean;
   sidebar: React.ReactNode;
-  hint: string | null;
-  onCancel: () => void;
-  arrows: Array<{ from: string; to: string; side: Side }>;
+  /** Seite, deren Einheiten man auswählen und bewegen kann (null = nur ansehen) */
+  commandSide: Side | null;
+  selectedUnits: number[];
+  onSelectUnits: (ids: number[]) => void;
+  onMoveOrder: (target: string) => void;
   supplied: Set<string> | null;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ w: 1000, h: 640 });
   const [view, setView] = useState<ViewState>({ cx: 0, cy: 0, scale: 0.02 });
-  const drag = useRef<{ x: number; y: number; cx: number; cy: number; moved: boolean } | null>(null);
+  // Verschieben mit rechter/mittlerer Maustaste
+  const drag = useRef<{ x: number; y: number; cx: number; cy: number; moved: boolean; button: number } | null>(null);
   const [box, setBox] = useState<null | { x0: number; y0: number; x1: number; y1: number }>(null);
+  const chips = useRef<Chip[]>([]);
+  const [hover, setHover] = useState<string | null>(null);
   // Gebiet bearbeiten: gesammelte Auswahl
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [regionPick, setRegionPick] = useState("");
 
   const campaignIds = useMemo(() => new Set(data.systems.map((s) => s.id)), [data.systems]);
   const byId = useMemo(() => new Map(data.systems.map((s) => [s.id, s])), [data.systems]);
-  const unitsAt = useMemo(() => {
-    const m = new Map<string, Record<Side, number>>();
-    for (const u of data.units) {
-      const e = m.get(u.systemId) ?? { republik: 0, kus: 0 };
-      e[u.side] += u.men * u.strength;
-      m.set(u.systemId, e);
-    }
-    return m;
-  }, [data.units]);
+  const selectedSet = useMemo(() => new Set(selectedUnits), [selectedUnits]);
+  const unitSystems = useMemo(() => new Set(data.units.map((u) => u.systemId)), [data.units]);
+
+  // Frontlinie aus dem Lagebild (Sicht, Berichte, Annahmen)
+  const grid = useMemo(() => {
+    const owned = data.systems.filter((s) => s.known?.owner).map((s) => ({ x: s.x, y: s.y, f: s.known!.owner as string }));
+    if (owned.length === 0) return null;
+    const xs = data.systems.map((s) => s.x);
+    const ys = data.systems.map((s) => s.y);
+    const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 200);
+    return influenceGrid(owned, Math.max(10, Math.min(80, span / 160)), Math.max(150, data.campaign.settings.supplyHop * 0.7));
+  }, [data.systems, data.campaign.settings.supplyHop]);
 
   useEffect(() => {
     setPending(new Set(campaignIds));
@@ -518,6 +556,14 @@ function CampaignMap({
     return () => c.removeEventListener("wheel", stop);
   }, []);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onSelectUnits([]);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onSelectUnits]);
+
   const toScreen = useCallback(
     (x: number, y: number): [number, number] => [size.w / 2 + (x - view.cx) * view.scale, size.h / 2 - (y - view.cy) * view.scale],
     [size, view],
@@ -538,9 +584,34 @@ function CampaignMap({
     ctx.fillRect(0, 0, w, h);
     ctx.font = "12px sans-serif";
 
+    // Frontlinie (Lagebild der Seite)
+    if (grid && !regionEdit) {
+      ctx.globalAlpha = 0.13;
+      for (const st of grid.strips) {
+        const [ax, ay] = toScreen(st.x, st.y + grid.cell);
+        const [bx, by] = toScreen(st.x + st.w, st.y);
+        if (bx < 0 || ax > w || by < 0 || ay > h) continue;
+        ctx.fillStyle = SIDE_COLOR[st.f as Side] ?? "#888";
+        ctx.fillRect(ax, ay, Math.max(bx - ax, 1), Math.max(by - ay, 1));
+      }
+      ctx.globalAlpha = 1;
+      for (const fr of grid.fronts) {
+        const [ax, ay] = toScreen(fr[0], fr[1]);
+        const [bx, by] = toScreen(fr[2], fr[3]);
+        if (Math.max(ax, bx) < 0 || Math.min(ax, bx) > w || Math.max(ay, by) < 0 || Math.min(ay, by) > h) continue;
+        ctx.strokeStyle = fr[4] ? "rgba(255,90,70,0.9)" : "rgba(200,215,240,0.18)";
+        ctx.lineWidth = fr[4] ? 2 : 1;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+      }
+      ctx.lineWidth = 1;
+    }
+
     // Routen
     for (const r of galaxy.routes) {
-      ctx.strokeStyle = r.major ? "rgba(90,140,220,0.45)" : "rgba(70,90,130,0.25)";
+      ctx.strokeStyle = r.major ? "rgba(90,140,220,0.4)" : "rgba(70,90,130,0.22)";
       ctx.lineWidth = 1;
       for (const line of r.lines) {
         ctx.beginPath();
@@ -568,42 +639,73 @@ function CampaignMap({
       }
     }
 
-    // Geplante Bewegungen
-    for (const a of arrows) {
-      const p = byId.get(a.from);
-      const q = byId.get(a.to);
-      if (!p || !q) continue;
-      const [x1, y1] = toScreen(p.x, p.y);
-      const [x2, y2] = toScreen(q.x, q.y);
-      ctx.strokeStyle = SIDE_COLOR[a.side];
-      ctx.lineWidth = 2;
-      ctx.setLineDash([7, 5]);
+    // Geplante Bewegungen: Route über die Wegpunkte; gewählte Einheiten hervorgehoben
+    const routeOf = (o: Order) => (o.data.path?.length ? o.data.path : [o.data.systemId ?? "", o.data.to ?? ""]).map((id) => byId.get(id)).filter((p): p is ViewSystem => !!p);
+    const moves = regionEdit ? [] : data.orders.filter((o) => o.kind === "move");
+    const isSel = (o: Order) => (o.data.unitIds ?? []).some((id) => selectedSet.has(id));
+    for (const o of [...moves].sort((a, b) => Number(isSel(a)) - Number(isSel(b)))) {
+      const pts = routeOf(o).map((p) => toScreen(p.x, p.y));
+      if (pts.length < 2) continue;
+      const sel = isSel(o);
+      ctx.strokeStyle = sel ? "#ffffff" : SIDE_COLOR[o.side];
+      ctx.globalAlpha = sel ? 1 : 0.75;
+      ctx.lineWidth = sel ? 2.5 : 1.5;
+      ctx.setLineDash(sel ? [] : [7, 5]);
       ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
+      pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
       ctx.stroke();
       ctx.setLineDash([]);
+      // Pfeilspitze am Ziel
+      const [x1, y1] = pts[pts.length - 2];
+      const [x2, y2] = pts[pts.length - 1];
       const ang = Math.atan2(y2 - y1, x2 - x1);
-      ctx.fillStyle = SIDE_COLOR[a.side];
+      ctx.fillStyle = ctx.strokeStyle;
       ctx.beginPath();
-      ctx.moveTo(x2 - Math.cos(ang) * 10, y2 - Math.sin(ang) * 10);
-      ctx.lineTo(x2 - Math.cos(ang) * 22 - Math.sin(ang) * 6, y2 - Math.sin(ang) * 22 + Math.cos(ang) * 6);
-      ctx.lineTo(x2 - Math.cos(ang) * 22 + Math.sin(ang) * 6, y2 - Math.sin(ang) * 22 - Math.cos(ang) * 6);
+      ctx.moveTo(x2 - Math.cos(ang) * 9, y2 - Math.sin(ang) * 9);
+      ctx.lineTo(x2 - Math.cos(ang) * 21 - Math.sin(ang) * 6, y2 - Math.sin(ang) * 21 + Math.cos(ang) * 6);
+      ctx.lineTo(x2 - Math.cos(ang) * 21 + Math.sin(ang) * 6, y2 - Math.sin(ang) * 21 - Math.cos(ang) * 6);
       ctx.fill();
+      // Wegpunkte
+      if (sel) {
+        pts.slice(1, -1).forEach(([x, y], i) => {
+          ctx.fillStyle = "#ffffff";
+          ctx.beginPath();
+          ctx.arc(x, y, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#06090e";
+          ctx.font = "bold 9px sans-serif";
+          ctx.fillText(String(i + 1), x - 3, y + 3);
+          ctx.font = "12px sans-serif";
+        });
+      }
+      ctx.globalAlpha = 1;
       ctx.lineWidth = 1;
     }
 
-    // Feldzug-Systeme
+    // Feldzug-Systeme: Farbe nach Lagebild
     for (const s of data.systems) {
       const [x, y] = toScreen(s.x, s.y);
       if (x < -20 || x > w + 20 || y < -20 || y > h + 20) continue;
       const r = 3 + s.tier;
+      const k = s.known;
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = s.owner === "?" ? "#2a2f3a" : s.owner ? SIDE_COLOR[s.owner] : "#8a93a6";
-      ctx.globalAlpha = regionEdit ? 0.5 : 1;
+      if (k && k.source !== "annahme") {
+        ctx.fillStyle = k.owner ? SIDE_COLOR[k.owner] : "#8a93a6";
+        ctx.globalAlpha = (regionEdit ? 0.5 : 1) * (k.source === "bericht" ? 0.55 : 1);
+      } else {
+        ctx.fillStyle = "#2a2f3a";
+      }
       ctx.fill();
       ctx.globalAlpha = 1;
+      if (k?.source === "annahme" && k.owner) {
+        // vermutlich feindlich
+        ctx.setLineDash([2, 2]);
+        ctx.strokeStyle = SIDE_COLOR[k.owner];
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
       if (s.reachable) {
         ctx.setLineDash([3, 3]);
         ctx.strokeStyle = "#6fdc8c";
@@ -633,8 +735,8 @@ function CampaignMap({
         ctx.arc(x, y, r + 6, 0, Math.PI * 2);
         ctx.stroke();
       }
-      if (s.id === selected) {
-        ctx.strokeStyle = "#ffffff";
+      if (s.id === selected || s.id === hover) {
+        ctx.strokeStyle = s.id === selected ? "#ffffff" : "rgba(255,255,255,0.5)";
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(x, y, r + 8, 0, Math.PI * 2);
@@ -643,22 +745,64 @@ function CampaignMap({
       ctx.lineWidth = 1;
     }
 
-    // Namen: wichtige zuerst (Auswahl, HQ, Truppen, Systemwert), nur ohne Überlappung
+    // Einheiten über den Systemen
     const labels = createLabeler(ctx, w, h);
-    const rank = (s: ViewSystem) => (s.id === selected ? 1000 : 0) + (s.hq ? 500 : 0) + (unitsAt.has(s.id) ? 100 : 0) + s.tier * 10;
+    const hits: Chip[] = [];
+    if (!regionEdit) {
+      const compact = view.scale < 0.05;
+      const bySystem = new Map<string, ViewUnit[]>();
+      for (const u of data.units) bySystem.set(u.systemId, [...(bySystem.get(u.systemId) ?? []), u]);
+      ctx.font = "bold 11px sans-serif";
+      for (const [sid, list] of bySystem) {
+        const s = byId.get(sid);
+        if (!s) continue;
+        const [x, y] = toScreen(s.x, s.y);
+        if (x < -80 || x > w + 80 || y < -40 || y > h + 40) continue;
+        // Gruppen: Seite + Typ (+ in Ausbildung); kompakt: je Seite eine
+        const groups = new Map<string, { side: Side; glyph: string; ship: boolean; ids: number[]; training: boolean }>();
+        for (const u of list) {
+          const training = u.status === "training";
+          const key = compact ? `${u.side}|${training}` : `${u.side}|${u.type}|${training}`;
+          const g = groups.get(key) ?? { side: u.side, glyph: compact ? "◆" : u.category === "ship" ? "▲" : CATEGORY_GLYPH[u.category] ?? "?", ship: u.category === "ship", ids: [], training };
+          g.ids.push(u.id);
+          groups.set(key, g);
+        }
+        const items = [...groups.values()].sort((a, b) => (a.side === b.side ? Number(b.ship) - Number(a.ship) : a.side === commandSide ? -1 : 1));
+        const widths = items.map((g) => ctx.measureText(`${g.glyph} ${g.ids.length}`).width + 10);
+        const total = widths.reduce((a, b) => a + b, 0) + (items.length - 1) * 3;
+        let cx = x - total / 2;
+        const cy = y - (3 + s.tier) - 22;
+        items.forEach((g, i) => {
+          const cw = widths[i];
+          const own = g.side === commandSide && !g.training;
+          const nSel = g.ids.filter((id) => selectedSet.has(id)).length;
+          ctx.globalAlpha = g.training ? 0.5 : 1;
+          ctx.fillStyle = "rgba(10,14,22,0.92)";
+          ctx.fillRect(cx, cy, cw, 16);
+          ctx.strokeStyle = nSel > 0 ? "#ffffff" : SIDE_COLOR[g.side];
+          ctx.lineWidth = nSel > 0 ? 2 : 1;
+          ctx.setLineDash(nSel > 0 && nSel < g.ids.length ? [3, 2] : []);
+          ctx.strokeRect(cx, cy, cw, 16);
+          ctx.setLineDash([]);
+          ctx.fillStyle = SIDE_COLOR[g.side];
+          ctx.fillText(`${g.glyph} ${g.ids.length}`, cx + 5, cy + 12);
+          ctx.globalAlpha = 1;
+          labels.reserve(cx, cy, cx + cw, cy + 16);
+          hits.push({ x: cx, y: cy, w: cw, h: 16, systemId: sid, side: g.side, ids: g.ids, own });
+          cx += cw + 3;
+        });
+      }
+      ctx.font = "12px sans-serif";
+      ctx.lineWidth = 1;
+    }
+    chips.current = hits;
+
+    // Namen: wichtige zuerst (Auswahl, HQ, Truppen, Systemwert), nur ohne Überlappung
+    const rank = (s: ViewSystem) => (s.id === selected ? 1000 : 0) + (s.hq ? 500 : 0) + (unitSystems.has(s.id) ? 100 : 0) + s.tier * 10;
     for (const s of [...data.systems].sort((a, b) => rank(b) - rank(a))) {
       const [x, y] = toScreen(s.x, s.y);
       const r = 3 + s.tier;
-      if (!labels.place(s.name, x + r + 4, y - 2, regionEdit ? "rgba(223,230,242,0.6)" : "#dfe6f2")) continue;
-      const forces = unitsAt.get(s.id);
-      if (!forces) continue;
-      let dx = 0;
-      for (const side of SIDES) {
-        if (!forces[side]) continue;
-        const label = `${Math.round(forces[side])}`;
-        labels.place(label, x + r + 4 + dx, y + 12, SIDE_COLOR[side]);
-        dx += ctx.measureText(label).width + 6;
-      }
+      labels.place(s.name, x + r + 4, y + 4, regionEdit ? "rgba(223,230,242,0.6)" : "#dfe6f2");
     }
     // Übrige Galaxie blass (im Gebietsmodus die gewählten zuerst)
     if (regionEdit || view.scale > 0.05) {
@@ -667,24 +811,15 @@ function CampaignMap({
       for (const s of rest) {
         const [x, y] = toScreen(s.x, s.y);
         if (x < -5 || x > w + 5 || y < -5 || y > h + 5) continue;
-        labels.place(s.name, x + 4, y - 2, regionEdit && pending.has(s.id) ? "rgba(240,200,80,0.85)" : "rgba(150,160,180,0.55)");
+        labels.place(s.name, x + 4, y + 4, regionEdit && pending.has(s.id) ? "rgba(240,200,80,0.85)" : "rgba(150,160,180,0.55)");
       }
     }
 
     if (box) {
-      ctx.strokeStyle = "rgba(240,200,80,0.9)";
+      ctx.strokeStyle = regionEdit ? "rgba(240,200,80,0.9)" : "rgba(255,255,255,0.8)";
       ctx.strokeRect(Math.min(box.x0, box.x1), Math.min(box.y0, box.y1), Math.abs(box.x1 - box.x0), Math.abs(box.y1 - box.y0));
     }
-  }, [galaxy, data, regionEdit, pending, selected, view, size, box, toScreen, campaignIds, unitsAt, arrows, supplied, byId]);
-
-  useEffect(() => {
-    if (!hint) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [hint, onCancel]);
+  }, [galaxy, data, regionEdit, pending, selected, hover, view, size, box, toScreen, campaignIds, byId, selectedSet, unitSystems, supplied, grid, commandSide]);
 
   const nearest = (sx: number, sy: number) => {
     let best: ViewSystem | null = null;
@@ -698,6 +833,32 @@ function CampaignMap({
       }
     }
     return best;
+  };
+  const chipAt = (x: number, y: number) => chips.current.find((c) => x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h) ?? null;
+
+  /** Klick (links, ohne Ziehen): Einheitensymbol wählen oder System */
+  const leftClick = (x: number, y: number, shift: boolean) => {
+    const chip = chipAt(x, y);
+    if (chip && chip.own) {
+      if (shift) {
+        const all = chip.ids.every((id) => selectedSet.has(id));
+        onSelectUnits(all ? selectedUnits.filter((id) => !chip.ids.includes(id)) : [...new Set([...selectedUnits, ...chip.ids])]);
+      } else onSelectUnits(chip.ids);
+      onSelect(chip.systemId);
+      return;
+    }
+    const sys = chip ? byId.get(chip.systemId) ?? null : nearest(x, y);
+    if (!shift) onSelectUnits([]);
+    onSelect(sys?.id ?? null);
+  };
+
+  /** Rahmen: alle eigenen Einheiten in den Systemen im Rahmen */
+  const boxSelect = (b: { x0: number; y0: number; x1: number; y1: number }, shift: boolean) => {
+    const [ax, ay] = toWorld(Math.min(b.x0, b.x1), Math.max(b.y0, b.y1));
+    const [bx, by] = toWorld(Math.max(b.x0, b.x1), Math.min(b.y0, b.y1));
+    const inBox = new Set(data.systems.filter((s) => s.x >= ax && s.x <= bx && s.y >= ay && s.y <= by).map((s) => s.id));
+    const ids = data.units.filter((u) => u.side === commandSide && u.status !== "training" && inBox.has(u.systemId)).map((u) => u.id);
+    onSelectUnits(shift ? [...new Set([...selectedUnits, ...ids])] : ids);
   };
 
   const regions = useMemo(() => {
@@ -722,6 +883,8 @@ function CampaignMap({
     }
     setPending(next);
   };
+
+  const canCommand = !!commandSide && data.campaign.status === "running";
 
   return (
     <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
@@ -750,65 +913,69 @@ function CampaignMap({
             </div>
           </div>
         )}
-        {hint && (
-          <div className="notice ok" style={{ marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            {hint}
-            <button onClick={onCancel}>Abbrechen</button>
-          </div>
-        )}
-        <div ref={wrapRef} className="panel" style={{ padding: 0, overflow: "hidden", cursor: hint ? "crosshair" : undefined }}>
+        <div ref={wrapRef} className="panel" style={{ padding: 0, overflow: "hidden" }}>
           <canvas
             ref={canvasRef}
             width={size.w}
             height={size.h}
-            style={{ width: "100%", display: "block" }}
+            style={{ width: "100%", display: "block", cursor: hover && selectedUnits.length > 0 && canCommand ? "crosshair" : "default" }}
             onContextMenu={(e) => e.preventDefault()}
             onMouseDown={(e) => {
               const [x, y] = canvasPos(e);
-              if (regionEdit && e.button === 0) {
+              if (e.button === 0) {
                 setBox({ x0: x, y0: y, x1: x, y1: y });
                 return;
               }
-              drag.current = { x, y, cx: view.cx, cy: view.cy, moved: false };
+              e.preventDefault();
+              drag.current = { x, y, cx: view.cx, cy: view.cy, moved: false, button: e.button };
             }}
             onMouseMove={(e) => {
               const [x, y] = canvasPos(e);
               const d = drag.current;
               if (d) {
-                if (Math.abs(x - d.x) + Math.abs(y - d.y) > 4) d.moved = true;
+                if (Math.abs(x - d.x) + Math.abs(y - d.y) > 5) d.moved = true;
                 if (d.moved) setView({ ...view, cx: d.cx - (x - d.x) / view.scale, cy: d.cy + (y - d.y) / view.scale });
               }
               if (box) setBox({ ...box, x1: x, y1: y });
+              const h = nearest(x, y)?.id ?? null;
+              if (h !== hover) setHover(h);
             }}
             onMouseUp={(e) => {
               const [x, y] = canvasPos(e);
-              if (box && Math.abs(x - box.x0) + Math.abs(y - box.y0) < 6) {
-                // Kurzer Klick ohne Ziehen: System wählen (z. B. fürs HQ)
+              if (e.button === 0 && box) {
+                const moved = Math.abs(x - box.x0) + Math.abs(y - box.y0) >= 6;
                 setBox(null);
-                onSelect(nearest(x, y)?.id ?? null);
-                return;
-              }
-              if (box) {
-                const [ax, ay] = toWorld(Math.min(box.x0, x), Math.max(box.y0, y));
-                const [bx, by] = toWorld(Math.max(box.x0, x), Math.min(box.y0, y));
-                const next = new Set(pending);
-                for (const s of galaxy.systems) {
-                  if (s.x >= ax && s.x <= bx && s.y >= ay && s.y <= by) {
-                    if (e.shiftKey) next.delete(s.id);
-                    else next.add(s.id);
-                  }
+                if (!moved) {
+                  if (regionEdit) onSelect(nearest(x, y)?.id ?? null);
+                  else leftClick(x, y, e.shiftKey);
+                  return;
                 }
-                setPending(next);
-                setBox(null);
+                if (regionEdit) {
+                  const [ax, ay] = toWorld(Math.min(box.x0, x), Math.max(box.y0, y));
+                  const [bx, by] = toWorld(Math.max(box.x0, x), Math.min(box.y0, y));
+                  const next = new Set(pending);
+                  for (const s of galaxy.systems) {
+                    if (s.x >= ax && s.x <= bx && s.y >= ay && s.y <= by) {
+                      if (e.shiftKey) next.delete(s.id);
+                      else next.add(s.id);
+                    }
+                  }
+                  setPending(next);
+                } else boxSelect({ ...box, x1: x, y1: y }, e.shiftKey);
                 return;
               }
               const d = drag.current;
               drag.current = null;
-              if (d && !d.moved && e.button === 0) onSelect(nearest(x, y)?.id ?? null);
+              // Rechtsklick ohne Ziehen: gewählte Einheiten dorthin
+              if (d && !d.moved && e.button === 2 && canCommand && selectedUnits.length > 0 && !regionEdit) {
+                const target = chipAt(x, y)?.systemId ?? nearest(x, y)?.id;
+                if (target) onMoveOrder(target);
+              }
             }}
             onMouseLeave={() => {
               drag.current = null;
               setBox(null);
+              setHover(null);
             }}
             onWheel={(e) => {
               const [x, y] = canvasPos(e);
@@ -819,9 +986,17 @@ function CampaignMap({
           />
         </div>
         <div className="subtitle" style={{ marginTop: 6 }}>
+          {!regionEdit && (
+            <>
+              Links: Einheit oder System wählen, Rahmen ziehen: eigene Einheiten wählen (Umschalt: dazu) · Rechts: gewählte Einheiten zum
+              Ziel schicken, rechts ziehen: Karte verschieben · Esc: Auswahl aufheben
+              <br />
+            </>
+          )}
           <span style={{ color: SIDE_COLOR.republik }}>●</span> Republik <span style={{ color: SIDE_COLOR.kus }}>●</span> KUS{" "}
-          <span style={{ color: "#8a93a6" }}>●</span> neutral <span style={{ color: "#2a2f3a" }}>●</span> unbekannt ·{" "}
-          <span style={{ color: "#6fdc8c" }}>◌</span> besetzbar · □ Hauptquartier · <span style={{ color: "#f0a030" }}>⬚</span> ohne Nachschub · Größe = Systemwert · Zahlen = Mannstärke
+          <span style={{ color: "#8a93a6" }}>●</span> neutral <span style={{ color: "#2a2f3a" }}>●</span> unbekannt · blass = alter Bericht ·
+          gestrichelter Ring = vermutet · <span style={{ color: "#ff5a46" }}>━</span> Front · ▲ Schiff, I/S/P/A Infanterie/Schwere/Panzer/Artillerie ·{" "}
+          <span style={{ color: "#6fdc8c" }}>◌</span> besetzbar · □ Hauptquartier · <span style={{ color: "#f0a030" }}>⬚</span> ohne Nachschub
           {byId.size === 0 && " · Noch kein Gebiet gewählt"}
         </div>
       </div>
@@ -842,7 +1017,7 @@ function SystemPanel({
   busy,
   op,
   planned,
-  onMove,
+  onSelectUnits,
 }: {
   data: CampaignView;
   selected: string | null;
@@ -851,13 +1026,11 @@ function SystemPanel({
   busy: boolean;
   op: (o: string, extra?: Record<string, unknown>) => Promise<unknown>;
   planned: Set<number>;
-  onMove: (from: string, unitIds: number[]) => void;
+  onSelectUnits: (ids: number[]) => void;
 }) {
   const sys = data.systems.find((s) => s.id === selected);
   const [buyType, setBuyType] = useState("");
   const [count, setCount] = useState(1);
-  const [moveCount, setMoveCount] = useState<Record<string, number>>({});
-  useEffect(() => setMoveCount({}), [selected]);
   if (!sys) return <div className="panel">System auf der Karte anklicken.</div>;
 
   const running = data.campaign.status === "running";
@@ -892,7 +1065,6 @@ function SystemPanel({
     groups.set(k, [...(groups.get(k) ?? []), u]);
   }
   const movable = (k: string) => running && canAct && k.startsWith(`${side}|`) && k.endsWith("|ready");
-  const moveIds = [...groups.entries()].flatMap(([k, list]) => (movable(k) ? list.slice(0, moveCount[k] ?? 0).map((u) => u.id) : []));
 
   return (
     <div className="panel">
@@ -935,16 +1107,10 @@ function SystemPanel({
                 Auflösen
               </button>
             )}
-            {movable(k) && (
-              <input
-                type="number"
-                min={0}
-                max={list.length}
-                value={moveCount[k] ?? 0}
-                title="Anzahl verlegen"
-                onChange={(e) => setMoveCount({ ...moveCount, [k]: Math.max(0, Math.min(list.length, Number(e.target.value) || 0)) })}
-                style={{ ...inputStyle, width: 64, padding: "2px 6px" }}
-              />
+            {(movable(k) || (running && canAct && k.startsWith(`${side}|`) && k.endsWith("|planned"))) && (
+              <button style={{ padding: "2px 8px" }} onClick={() => onSelectUnits(list.map((x) => x.id))}>
+                Auswählen
+              </button>
             )}
           </div>
         );
@@ -958,13 +1124,8 @@ function SystemPanel({
           {slotsLeft <= 0 && <div className="subtitle">Alle Aktionen dieses Zugs sind verplant.</div>}
           {slotsLeft > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {moveIds.length > 0 && (
-                <button className="primary" disabled={busy} onClick={() => onMove(sys.id, moveIds)}>
-                  {moveIds.length} Einheit(en) verlegen - Ziel wählen
-                </button>
-              )}
-              {[...groups.keys()].some(movable) && moveIds.length === 0 && (
-                <div className="subtitle">Zum Verlegen oben die Anzahl je Einheit eintragen. Schiffe nehmen Bodentruppen mit (Laderaum).</div>
+              {[...groups.keys()].some(movable) && (
+                <div className="subtitle">Verlegen: Einheiten über dem System anklicken, dann mit der rechten Maustaste auf das Ziel.</div>
               )}
               {canOccupy && (
                 <button disabled={busy || free < occupyCost} onClick={() => void order({ kind: "occupy", systemId: sys.id })}>
@@ -1141,6 +1302,79 @@ function TurnPanel({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Gewählte Einheiten: Zusammensetzung, geplante Route, Auswahl verkleinern */
+function SelectionPanel({
+  data,
+  selectedUnits,
+  busy,
+  op,
+  onSelectUnits,
+}: {
+  data: CampaignView;
+  selectedUnits: number[];
+  busy: boolean;
+  op: (o: string, extra?: Record<string, unknown>) => Promise<unknown>;
+  onSelectUnits: (ids: number[]) => void;
+}) {
+  const sel = new Set(selectedUnits);
+  const units = data.units.filter((u) => sel.has(u.id));
+  const name = (id?: string) => data.systems.find((s) => s.id === id)?.name ?? id ?? "";
+  const groups = new Map<string, ViewUnit[]>();
+  for (const u of units) groups.set(`${u.systemId}|${u.type}`, [...(groups.get(`${u.systemId}|${u.type}`) ?? []), u]);
+  const orders = data.orders.filter((o) => o.kind === "move" && (o.data.unitIds ?? []).some((id) => sel.has(id)));
+  const ships = units.filter((u) => u.category === "ship");
+  const capacity = ships.reduce((a, u) => a + (data.unitTypes.find((t) => t.key === u.type)?.capacity ?? 0), 0);
+  const ground = units.length - ships.length;
+  const lead = data.viewer.kind === "admin";
+
+  return (
+    <div className="panel">
+      <h3 style={{ marginTop: 0 }}>{units.length} Einheit(en) gewählt</h3>
+      {[...groups.entries()].map(([k, list]) => (
+        <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, padding: "3px 0" }}>
+          <span>
+            <span style={{ color: SIDE_COLOR[list[0].side] }}>●</span> {list.length}× {list[0].name}
+            <span style={{ color: "var(--text-muted)" }}> in {name(list[0].systemId)}</span>
+          </span>
+          <span className="button-row">
+            <button style={{ padding: "2px 8px" }} title="Eine weniger" onClick={() => onSelectUnits(selectedUnits.filter((id) => id !== list[list.length - 1].id))}>
+              −
+            </button>
+            <button style={{ padding: "2px 8px" }} title="Aus der Auswahl" onClick={() => onSelectUnits(selectedUnits.filter((id) => !list.some((u) => u.id === id)))}>
+              ×
+            </button>
+          </span>
+        </div>
+      ))}
+      <div className="subtitle" style={{ marginTop: 8 }}>
+        {ships.length > 0 ? `Laderaum ${capacity} Kompanien, ${ground} Bodeneinheit(en) gewählt.` : ground > 0 ? "Ohne Schiffe nur in eigene Systeme." : ""}
+        {ground > capacity && ships.length > 0 && <span style={{ color: "#f0a030" }}> Zu wenig Laderaum!</span>}
+      </div>
+
+      <h4>Befehl</h4>
+      {orders.length === 0 && <div className="subtitle">Rechtsklick auf ein Zielsystem. Jedes Ziel ist in einem Zug erreichbar.</div>}
+      {orders.map((o) => (
+        <div key={`${o.side}${o.slot}`} style={{ fontSize: 14, marginBottom: 8 }}>
+          <b>Aktion {o.slot}:</b> {name(o.data.systemId)} → {name(o.data.to)}
+          {o.data.distance ? <span style={{ color: "var(--text-muted)" }}> ({o.data.distance} pc)</span> : null}
+          {(o.data.path?.length ?? 0) > 2 && (
+            <div className="subtitle" style={{ margin: "2px 0" }}>
+              Route: {(o.data.path ?? []).map((id) => name(id)).join(" → ")}
+            </div>
+          )}
+          <button style={{ padding: "2px 8px", marginTop: 4 }} disabled={busy} onClick={() => void op("orderRemove", { slot: o.slot, ...(lead ? { side: o.side } : {}) })}>
+            Befehl aufheben
+          </button>
+        </div>
+      ))}
+      {orders.length > 0 && <div className="subtitle">Neuer Rechtsklick leitet die gewählten Einheiten um.</div>}
+      <button style={{ marginTop: 8 }} onClick={() => onSelectUnits([])}>
+        Auswahl aufheben (Esc)
+      </button>
     </div>
   );
 }

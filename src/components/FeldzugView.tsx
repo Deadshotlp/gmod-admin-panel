@@ -840,7 +840,10 @@ function CampaignMap({
   const leftClick = (x: number, y: number, shift: boolean) => {
     const chip = chipAt(x, y);
     if (chip && chip.own) {
-      if (shift) {
+      // Im selben System (oder mit Umschalt) ergänzt ein Klick die Auswahl,
+      // ein zweiter Klick nimmt das Symbol wieder heraus; sonst neue Auswahl
+      const sameSystem = data.units.some((u) => selectedSet.has(u.id) && u.systemId === chip.systemId);
+      if (shift || sameSystem) {
         const all = chip.ids.every((id) => selectedSet.has(id));
         onSelectUnits(all ? selectedUnits.filter((id) => !chip.ids.includes(id)) : [...new Set([...selectedUnits, ...chip.ids])]);
       } else onSelectUnits(chip.ids);
@@ -977,6 +980,15 @@ function CampaignMap({
               setBox(null);
               setHover(null);
             }}
+            onDoubleClick={(e) => {
+              // Doppelklick: alle eigenen Einheiten des Systems wählen
+              if (regionEdit || !commandSide) return;
+              const [x, y] = canvasPos(e);
+              const sid = chipAt(x, y)?.systemId ?? nearest(x, y)?.id;
+              if (!sid) return;
+              const ids = data.units.filter((u) => u.side === commandSide && u.systemId === sid && u.status !== "training").map((u) => u.id);
+              if (ids.length > 0) onSelectUnits(e.shiftKey ? [...new Set([...selectedUnits, ...ids])] : ids);
+            }}
             onWheel={(e) => {
               const [x, y] = canvasPos(e);
               const [wx, wy] = toWorld(x, y);
@@ -988,8 +1000,9 @@ function CampaignMap({
         <div className="subtitle" style={{ marginTop: 6 }}>
           {!regionEdit && (
             <>
-              Links: Einheit oder System wählen, Rahmen ziehen: eigene Einheiten wählen (Umschalt: dazu) · Rechts: gewählte Einheiten zum
-              Ziel schicken, rechts ziehen: Karte verschieben · Esc: Auswahl aufheben
+              Links: Einheitensymbol wählen (weitere im selben System kommen dazu), Doppelklick: alle eigenen Einheiten des Systems, Rahmen
+              ziehen: eigene Einheiten wählen (Umschalt: dazu) · Rechts: gewählte Einheiten zum Ziel schicken - Bodentruppen nehmen freie
+              Schiffe als Transport mit · rechts ziehen: Karte verschieben · Esc: Auswahl aufheben
               <br />
             </>
           )}
@@ -1125,7 +1138,15 @@ function SystemPanel({
           {slotsLeft > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {[...groups.keys()].some(movable) && (
-                <div className="subtitle">Verlegen: Einheiten über dem System anklicken, dann mit der rechten Maustaste auf das Ziel.</div>
+                <>
+                  <button
+                    className="primary"
+                    onClick={() => onSelectUnits(units.filter((u) => u.side === side && u.status !== "training").map((u) => u.id))}
+                  >
+                    Alle eigenen Einheiten hier auswählen
+                  </button>
+                  <div className="subtitle">Danach mit der rechten Maustaste auf das Ziel. Bodentruppen nehmen freie Schiffe als Transport mit.</div>
+                </>
               )}
               {canOccupy && (
                 <button disabled={busy || free < occupyCost} onClick={() => void order({ kind: "occupy", systemId: sys.id })}>
@@ -1351,8 +1372,8 @@ function SelectionPanel({
         </div>
       ))}
       <div className="subtitle" style={{ marginTop: 8 }}>
-        {ships.length > 0 ? `Laderaum ${capacity} Kompanien, ${ground} Bodeneinheit(en) gewählt.` : ground > 0 ? "Ohne Schiffe nur in eigene Systeme." : ""}
-        {ground > capacity && ships.length > 0 && <span style={{ color: "#f0a030" }}> Zu wenig Laderaum!</span>}
+        {ships.length > 0 ? `Laderaum ${capacity} Kompanien, ${ground} Bodeneinheit(en) gewählt.` : ""}
+        {ground > capacity && " Für fremde Systeme kommen freie Schiffe aus dem Ausgangssystem automatisch als Transport mit."}
       </div>
 
       <h4>Befehl</h4>

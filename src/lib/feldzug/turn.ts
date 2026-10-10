@@ -101,6 +101,7 @@ export function validateOrder(
       });
       const ships = units.filter((u) => isShip(types, u));
       const ground = units.filter((u) => !isShip(types, u));
+      const capacityOf = (list: Unit[]) => list.reduce((a, u) => a + (types.get(u.type)?.capacity ?? 0), 0);
 
       // Garnison: das letzte Bodenkontingent eines eigenen Systems bleibt
       if (from.owner === side && ground.length > 0) {
@@ -108,15 +109,35 @@ export function validateOrder(
         if (left.length === 0) throw new RuleError("Mindestens eine Bodeneinheit bleibt als Garnison zurück");
       }
 
-      if (ships.length > 0) {
-        const capacity = ships.reduce((a, u) => a + (types.get(u.type)?.capacity ?? 0), 0);
-        if (ground.length > capacity) throw new RuleError(`Zu wenig Laderaum (${capacity} Kompanien, ${ground.length} gewählt)`);
-      } else if (to.owner !== side) {
-        throw new RuleError("Bodentruppen ohne Schiffe nur in eigene Systeme (für Angriffe Schiffe mitschicken)");
+      // Transport: Bodentruppen brauchen Laderaum, außer zwischen eigenen
+      // Systemen. Fehlt er, kommen freie eigene Schiffe aus dem Ausgangssystem
+      // automatisch mit (größter Laderaum zuerst).
+      const needsTransport = ground.length > 0 && (ships.length > 0 || to.owner !== side);
+      const escorts: Unit[] = [];
+      if (needsTransport && ground.length > capacityOf(ships)) {
+        const free = state.units
+          .filter((u) => u.side === side && u.systemId === from.id && isShip(types, u) && u.status !== "training" && !planned.has(u.id) && !ids.includes(u.id))
+          .sort((a, b) => (types.get(b.type)?.capacity ?? 0) - (types.get(a.type)?.capacity ?? 0));
+        for (const u of free) {
+          if (ground.length <= capacityOf([...ships, ...escorts])) break;
+          escorts.push(u);
+        }
+        const capacity = capacityOf([...ships, ...escorts]);
+        if (ground.length > capacity) {
+          throw new RuleError(
+            capacity === 0
+              ? "Bodentruppen brauchen für fremde Systeme ein Transportschiff - im Ausgangssystem ist keins frei"
+              : `Zu wenig Laderaum: ${ground.length} Kompanien, im Ausgangssystem frei ${capacity}`,
+          );
+        }
+      }
+      for (const u of escorts) {
+        ids.push(u.id);
+        units.push(u);
       }
       // Route über das Sprungnetz; ohne Verbindung direkter Sprung
       const route = pathCost(state.graph, from.id, to.id, Infinity) ?? { cost: Math.hypot(to.x - from.x, to.y - from.y), path: [from.id, to.id] };
-      const label = `${units.length} Einheit(en) ${from.name} → ${to.name}`;
+      const label = `${units.length} Einheit(en) ${from.name} → ${to.name}` + (escorts.length > 0 ? ` (${escorts.length} Schiff(e) als Transport)` : "");
       return {
         kind: "move",
         data: { systemId: from.id, to: to.id, unitIds: ids, distance: Math.round(route.cost), path: route.path, cost: 0 },

@@ -263,7 +263,7 @@ const schema = z.discriminatedUnion("op", [
     side: sideSchema.optional(),
     slot: z.number().int().min(1).max(20).optional(),
     order: z.object({
-      kind: z.enum(["move", "build", "fortify", "scout", "occupy"]),
+      kind: z.enum(["move", "build", "fortify", "scout", "occupy", "land"]),
       systemId: sysId.optional(),
       to: sysId.optional(),
       unitIds: z.array(z.number().int()).max(500).optional(),

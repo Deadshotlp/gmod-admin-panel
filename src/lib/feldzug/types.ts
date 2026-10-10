@@ -138,7 +138,7 @@ export interface Unit {
   systemId: string;
   strength: number;
   xp: number;
-  status: "ready" | "training" | "moving" | "battle";
+  status: "ready" | "training" | "moving" | "battle" | "orbit";
   readyTurn: number;
   fleetId: number | null;
   navalShipId: number | null;

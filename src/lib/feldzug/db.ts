@@ -364,7 +364,7 @@ export async function deleteCampaign(id: number): Promise<void> {
 /* Befehle und Gefechte                                                  */
 /* -------------------------------------------------------------------- */
 
-export type OrderKind = "move" | "build" | "fortify" | "scout" | "occupy";
+export type OrderKind = "move" | "build" | "fortify" | "scout" | "occupy" | "land";
 
 export interface Order {
   side: Side;

@@ -759,11 +759,12 @@ function CampaignMap({
         const [x, y] = toScreen(s.x, s.y);
         if (x < -80 || x > w + 80 || y < -40 || y > h + 40) continue;
         // Gruppen: Seite + Typ (+ in Ausbildung); kompakt: je Seite eine
-        const groups = new Map<string, { side: Side; glyph: string; ship: boolean; ids: number[]; training: boolean }>();
+        const groups = new Map<string, { side: Side; glyph: string; ship: boolean; ids: number[]; training: boolean; orbit: boolean }>();
         for (const u of list) {
           const training = u.status === "training";
-          const key = compact ? `${u.side}|${training}` : `${u.side}|${u.type}|${training}`;
-          const g = groups.get(key) ?? { side: u.side, glyph: compact ? "◆" : u.category === "ship" ? "▲" : CATEGORY_GLYPH[u.category] ?? "?", ship: u.category === "ship", ids: [], training };
+          const orbit = u.status === "orbit";
+          const key = compact ? `${u.side}|${training}` : `${u.side}|${u.type}|${training}|${orbit}`;
+          const g = groups.get(key) ?? { side: u.side, glyph: compact ? "◆" : u.category === "ship" ? "▲" : CATEGORY_GLYPH[u.category] ?? "?", ship: u.category === "ship", ids: [], training, orbit: orbit && !compact };
           g.ids.push(u.id);
           groups.set(key, g);
         }
@@ -781,7 +782,7 @@ function CampaignMap({
           ctx.fillRect(cx, cy, cw, 16);
           ctx.strokeStyle = nSel > 0 ? "#ffffff" : SIDE_COLOR[g.side];
           ctx.lineWidth = nSel > 0 ? 2 : 1;
-          ctx.setLineDash(nSel > 0 && nSel < g.ids.length ? [3, 2] : []);
+          ctx.setLineDash((nSel > 0 && nSel < g.ids.length) || g.orbit ? [3, 2] : []);
           ctx.strokeRect(cx, cy, cw, 16);
           ctx.setLineDash([]);
           ctx.fillStyle = SIDE_COLOR[g.side];
@@ -1008,7 +1009,7 @@ function CampaignMap({
           )}
           <span style={{ color: SIDE_COLOR.republik }}>●</span> Republik <span style={{ color: SIDE_COLOR.kus }}>●</span> KUS{" "}
           <span style={{ color: "#8a93a6" }}>●</span> neutral <span style={{ color: "#2a2f3a" }}>●</span> unbekannt · blass = alter Bericht ·
-          gestrichelter Ring = vermutet · <span style={{ color: "#ff5a46" }}>━</span> Front · ▲ Schiff, I/S/P/A Infanterie/Schwere/Panzer/Artillerie ·{" "}
+          gestrichelter Ring = vermutet · gestricheltes Symbol = an Bord im Orbit · <span style={{ color: "#ff5a46" }}>━</span> Front · ▲ Schiff, I/S/P/A Infanterie/Schwere/Panzer/Artillerie ·{" "}
           <span style={{ color: "#6fdc8c" }}>◌</span> besetzbar · □ Hauptquartier · <span style={{ color: "#f0a030" }}>⬚</span> ohne Nachschub
           {byId.size === 0 && " · Noch kein Gebiet gewählt"}
         </div>
@@ -1073,11 +1074,15 @@ function SystemPanel({
   // Einheiten gruppiert nach Seite, Typ und Zustand
   const groups = new Map<string, ViewUnit[]>();
   for (const u of units) {
-    const state = u.status === "training" ? "training" : planned.has(u.id) ? "planned" : "ready";
+    const state = u.status === "training" ? "training" : planned.has(u.id) ? "planned" : u.status === "orbit" ? "orbit" : "ready";
     const k = `${u.side}|${u.type}|${state}`;
     groups.set(k, [...(groups.get(k) ?? []), u]);
   }
-  const movable = (k: string) => running && canAct && k.startsWith(`${side}|`) && k.endsWith("|ready");
+  const movable = (k: string) => running && canAct && k.startsWith(`${side}|`) && (k.endsWith("|ready") || k.endsWith("|orbit"));
+  // Landeoperation: eigene Bodentruppen im Orbit, keine feindlichen Schiffe im System
+  const inOrbit = units.filter((u) => u.side === side && u.status === "orbit" && !planned.has(u.id));
+  const enemyShips = units.some((u) => u.side !== side && u.category === "ship");
+  const landingPlanned = myOrders.some((o) => o.kind === "land" && o.data.systemId === sys.id);
 
   return (
     <div className="panel">
@@ -1112,7 +1117,7 @@ function SystemPanel({
               <span style={{ color: "var(--text-muted)" }}>
                 {" "}
                 ({u.category === "ship" ? "Schiff" : `${Math.round(list.reduce((a, x) => a + x.men * x.strength, 0))} Mann`}
-                {state === "training" ? ", in Bau" : state === "planned" ? ", hat Befehl" : ""})
+                {state === "training" ? ", in Bau" : state === "planned" ? ", hat Befehl" : state === "orbit" ? ", an Bord im Orbit" : ""})
               </span>
             </span>
             {canAct && !running && u.side === side && (
@@ -1135,6 +1140,21 @@ function SystemPanel({
             Befehle ({SIDE_NAME[side]}) · {Math.max(0, slotsLeft)} von {settings.actionsPerTurn} Aktionen frei · {free.toLocaleString("de-DE")} Punkte frei
           </h4>
           {slotsLeft <= 0 && <div className="subtitle">Alle Aktionen dieses Zugs sind verplant.</div>}
+          {inOrbit.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              {landingPlanned ? (
+                <div className="subtitle">Landeoperation ist geplant.</div>
+              ) : enemyShips ? (
+                <div className="subtitle" style={{ color: "#f0a030" }}>
+                  {inOrbit.length} Kompanie(n) im Orbit - Landung erst ohne feindliche Schiffe im System.
+                </div>
+              ) : (
+                <button className="primary" disabled={busy || slotsLeft <= 0} onClick={() => void order({ kind: "land", systemId: sys.id })}>
+                  Landeoperation durchführen ({inOrbit.length} Kompanie(n))
+                </button>
+              )}
+            </div>
+          )}
           {slotsLeft > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {[...groups.keys()].some(movable) && (
@@ -1220,7 +1240,7 @@ function SystemPanel({
   );
 }
 
-const KIND_NAME: Record<string, string> = { move: "Verlegen", build: "Bauen", fortify: "Befestigen", scout: "Aufklären", occupy: "Besetzen" };
+const KIND_NAME: Record<string, string> = { move: "Verlegen", build: "Bauen", fortify: "Befestigen", scout: "Aufklären", occupy: "Besetzen", land: "Landen" };
 
 /** Zug: geplante Befehle, Bereitschaft, Gefechte; Spielleitung beendet den Zug */
 function TurnPanel({

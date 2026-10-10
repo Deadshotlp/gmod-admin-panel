@@ -10,6 +10,13 @@
  *   fortify  Befestigung +1
  *   scout    Aufklärung eines Systems (Bericht)
  *   occupy   neutrales System besetzen (wie im Aufbau, mit Garnison)
+ *   land     Landeoperation: Bodentruppen im Orbit eines feindlichen Systems
+ *            gehen herunter (nur ohne feindliche Schiffe im System)
+ *
+ * Bodentruppen, die ein feindliches System erreichen, bleiben an Bord im
+ * Orbit. Raumschlacht, wenn Schiffe beider Seiten da sind; Bodenkampf, wenn
+ * gelandete Truppen beider Seiten da sind; Einnahme, wenn nur eine Seite
+ * gelandete Truppen hat.
  *
  * Auswertung beim Zugende durch die Spielleitung, beide Seiten gleichzeitig:
  *   1. Bau, Befestigung, Besetzen   2. Bewegung   3. Lage: Eroberung oder
@@ -177,6 +184,22 @@ export function validateOrder(
       return { kind: "scout", data: { systemId: at.id, cost: 0 }, label: `${at.name} aufklären` };
     }
 
+    case "land": {
+      const at = sys(input.systemId);
+      sameTarget("land", at.id);
+      const planned = plannedUnits(orders);
+      const troops = state.units.filter((u) => u.side === side && u.systemId === at.id && u.status === "orbit" && !planned.has(u.id));
+      if (troops.length === 0) throw new RuleError("Keine eigenen Bodentruppen im Orbit");
+      if (state.units.some((u) => u.side !== side && u.systemId === at.id && isShip(types, u))) {
+        throw new RuleError("Feindliche Schiffe im System - erst die Raumschlacht gewinnen");
+      }
+      return {
+        kind: "land",
+        data: { systemId: at.id, unitIds: troops.map((u) => u.id), cost: 0 },
+        label: `Landeoperation auf ${at.name} (${troops.length} Kompanie(n))`,
+      };
+    }
+
     case "occupy": {
       const at = sys(input.systemId);
       if (at.owner) throw new RuleError("Nur neutrale Systeme");
@@ -297,6 +320,27 @@ export async function resolveTurn(state: CampaignState, orders: Order[], types: 
     }
   }
 
+  // 1d. Landeoperationen (die Truppen waren schon im Orbit)
+  for (const o of orders.filter((x) => x.kind === "land")) {
+    const id = String(o.data.systemId);
+    const troops = state.units.filter((u) => u.side === o.side && u.systemId === id && u.status === "orbit");
+    if (troops.length === 0) {
+      await result(o, "Fehlgeschlagen: keine Truppen mehr im Orbit");
+      continue;
+    }
+    if (state.units.some((u) => u.side !== o.side && u.systemId === id && isShip(types, u))) {
+      await result(o, "Abgebrochen: feindliche Schiffe im System");
+      notes[o.side].push(`Landung auf ${name(id)} abgebrochen - feindliche Schiffe im System.`);
+      continue;
+    }
+    for (const u of troops) {
+      u.status = "ready";
+      changedUnits.add(u.id);
+    }
+    await result(o, `${troops.length} Kompanie(n) gelandet`);
+    notes[o.side].push(`Landeoperation auf ${name(id)}: ${troops.length} Kompanie(n) gelandet.`);
+  }
+
   // 2. Bewegung (gleichzeitig)
   const arrivals = new Map<string, Set<Side>>();
   for (const o of orders.filter((x) => x.kind === "move")) {
@@ -308,9 +352,10 @@ export async function resolveTurn(state: CampaignState, orders: Order[], types: 
       await result(o, "Fehlgeschlagen: Einheiten nicht mehr dort");
       continue;
     }
+    const enemyHeld = !!state.systems.get(to)?.owner && state.systems.get(to)?.owner !== o.side;
     for (const u of units) {
       u.systemId = to;
-      u.status = "ready";
+      u.status = enemyHeld && !isShip(types, u) ? "orbit" : "ready";
       changedUnits.add(u.id);
     }
     const set = arrivals.get(to) ?? new Set<Side>();
@@ -320,57 +365,63 @@ export async function resolveTurn(state: CampaignState, orders: Order[], types: 
     notes[o.side].push(`${units.length} Einheit(en) von ${name(from)} nach ${name(to)} verlegt.`);
   }
 
-  // 3. Lage je System: Eroberung oder Gefecht
-  const openBattles = new Set((await loadBattles(c.id)).filter((b) => b.status !== "done").map((b) => b.systemId));
+  // 3. Lage je System: Raumschlacht, Bodenkampf oder Einnahme
+  const battleKey = (id: string, kind: string) => `${id}|${kind}`;
+  const openBattles = new Set((await loadBattles(c.id)).filter((b) => b.status !== "done").map((b) => battleKey(b.systemId, b.kind)));
   for (const sys of state.systems.values()) {
     const here = state.units.filter((u) => u.systemId === sys.id);
-    const present = SIDES.filter((s) => here.some((u) => u.side === s));
-    if (present.length === 2) {
-      if (!sys.contested) {
-        sys.contested = true;
-        changedSystems.add(sys.id);
-      }
-      if (!openBattles.has(sys.id)) {
-        const bothShips = SIDES.every((s) => here.some((u) => u.side === s && isShip(types, u)));
-        const movers = arrivals.get(sys.id);
-        const attacker: Side = sys.owner ? otherSide(sys.owner) : movers && movers.size === 1 ? [...movers][0] : "republik";
-        await insertBattle(c.id, {
-          turn,
-          systemId: sys.id,
-          kind: bothShips ? "space" : "ground",
-          attacker,
-          mode: c.settings.defaultBattleMode,
-          status: "open",
-          seed: Math.floor(Math.random() * 2 ** 31),
-          result: {},
-          scheduledAt: 0,
-        });
-        openBattles.add(sys.id);
-        for (const s of SIDES) notes[s].push(`Gefecht um ${sys.name}: ${bothShips ? "Raumschlacht" : "Bodenkampf"} (${SIDE_NAME[attacker]} greift an).`);
-      }
-      continue;
-    }
-    if (sys.contested && present.length < 2 && !openBattles.has(sys.id)) {
-      sys.contested = false;
+    const ships = (s: Side) => here.some((u) => u.side === s && isShip(types, u));
+    const landed = (s: Side) => here.some((u) => u.side === s && !isShip(types, u) && u.status !== "orbit");
+    const movers = arrivals.get(sys.id);
+    const attackerOf = (): Side => (sys.owner ? otherSide(sys.owner) : movers && movers.size === 1 ? [...movers][0] : "republik");
+    const fight = async (kind: "space" | "ground") => {
+      if (openBattles.has(battleKey(sys.id, kind))) return;
+      const attacker = attackerOf();
+      await insertBattle(c.id, {
+        turn,
+        systemId: sys.id,
+        kind,
+        attacker,
+        mode: c.settings.defaultBattleMode,
+        status: "open",
+        seed: Math.floor(Math.random() * 2 ** 31),
+        result: {},
+        scheduledAt: 0,
+      });
+      openBattles.add(battleKey(sys.id, kind));
+      for (const s of SIDES) notes[s].push(`Gefecht um ${sys.name}: ${kind === "space" ? "Raumschlacht" : "Bodenkampf"} (${SIDE_NAME[attacker]} greift an).`);
+    };
+
+    if (SIDES.every(ships)) await fight("space");
+    if (SIDES.every(landed)) await fight("ground");
+    const contested = openBattles.has(battleKey(sys.id, "space")) || openBattles.has(battleKey(sys.id, "ground"));
+    if (sys.contested !== contested) {
+      sys.contested = contested;
       changedSystems.add(sys.id);
     }
-    // Eroberung: nur eine Seite mit Bodentruppen da, System gehört ihr nicht
-    if (present.length === 1) {
-      const side = present[0];
-      const hasGround = here.some((u) => !isShip(types, u));
-      if (hasGround && sys.owner !== side) {
-        const loser = sys.owner;
-        sys.owner = side;
-        sys.fort = 0;
-        changedSystems.add(sys.id);
-        notes[side].push(`${sys.name} eingenommen.`);
-        if (loser) {
-          notes[loser].push(`${sys.name} verloren.`);
-          if (c.hq[loser] === sys.id) {
-            notes[loser].push(`Das Hauptquartier ${sys.name} ist gefallen!`);
-            notes[side].push(`Das gegnerische Hauptquartier ${sys.name} ist gefallen!`);
-          }
+
+    // Einnahme: nur eine Seite hat gelandete Bodentruppen, System gehört ihr nicht
+    const holders = SIDES.filter(landed);
+    if (holders.length === 1 && sys.owner !== holders[0]) {
+      const side = holders[0];
+      const loser = sys.owner;
+      sys.owner = side;
+      sys.fort = 0;
+      changedSystems.add(sys.id);
+      notes[side].push(`${sys.name} eingenommen.`);
+      if (loser) {
+        notes[loser].push(`${sys.name} verloren.`);
+        if (c.hq[loser] === sys.id) {
+          notes[loser].push(`Das Hauptquartier ${sys.name} ist gefallen!`);
+          notes[side].push(`Das gegnerische Hauptquartier ${sys.name} ist gefallen!`);
         }
+      }
+    }
+    // Im Orbit über einem eigenen System: Truppen gehen herunter
+    for (const u of here) {
+      if (u.status === "orbit" && u.side === sys.owner) {
+        u.status = "ready";
+        changedUnits.add(u.id);
       }
     }
   }

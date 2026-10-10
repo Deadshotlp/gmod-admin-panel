@@ -69,6 +69,10 @@ interface Settings {
   routeMajor: number;
   routeMinor: number;
   junctionDist: number;
+  fortifyCost: number;
+  fortMax: number;
+  hqBonus: number;
+  traitBonus: number;
 }
 
 interface ListData {
@@ -114,6 +118,17 @@ interface CampaignView {
   units: ViewUnit[];
   reports: Array<{ turn: number; side: string; kind: string; text: string; created_at: number }>;
   unitTypes: UnitType[];
+  orders: Order[];
+  battles: Array<{ id: number; turn: number; systemId: string; kind: string; attacker: Side; mode: string; status: string }>;
+  supply: Partial<Record<Side, { total: number; supplied: number; cut: number; ids: string[] }>>;
+}
+
+interface Order {
+  side: Side;
+  slot: number;
+  kind: string;
+  data: { systemId?: string; to?: string; unitIds?: number[]; label?: string; cost?: number; distance?: number };
+  result: string;
 }
 
 type Tab = "karte" | "gebiet" | "kommandeure" | "einstellungen" | "katalog";
@@ -133,6 +148,8 @@ export default function FeldzugView() {
   const [selected, setSelected] = useState<string | null>(null);
   // Spielleitung handelt für eine Seite
   const [actAs, setActAs] = useState<Side>("republik");
+  // Bewegung: nach Auswahl der Einheiten Ziel auf der Karte anklicken
+  const [movePick, setMovePick] = useState<null | { from: string; unitIds: number[] }>(null);
 
   const loadList = useCallback(async () => {
     const { data: d, error } = await readJson<ListData>(await fetchWithTimeout("/api/feldzug", { cache: "no-store" }));
@@ -187,6 +204,21 @@ export default function FeldzugView() {
   const lead = viewer?.kind === "admin";
   const actSide: Side = mySide ?? actAs;
   const setup = data?.campaign.status === "setup";
+  const running = data?.campaign.status === "running";
+  const planned = useMemo(() => {
+    const set = new Set<number>();
+    for (const o of data?.orders ?? []) if (o.kind === "move") for (const id of o.data.unitIds ?? []) set.add(id);
+    return set;
+  }, [data]);
+  const selectSystem = (id: string | null) => {
+    if (movePick && id) {
+      const pick = movePick;
+      setMovePick(null);
+      if (id !== pick.from) void op("order", { order: { kind: "move", systemId: pick.from, to: id, unitIds: pick.unitIds } });
+      return;
+    }
+    setSelected(id);
+  };
 
   const refresh = () => {
     if (campaignId != null) void loadCampaign(campaignId);
@@ -281,7 +313,7 @@ export default function FeldzugView() {
                   {{ karte: "Karte", gebiet: "Gebiet & HQs", kommandeure: "Kommandeure", einstellungen: "Einstellungen", katalog: "Einheitenkatalog" }[t]}
                 </button>
               ))}
-              {tab === "karte" && setup && (
+              {tab === "karte" && (setup || running) && (
                 <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}>
                   Handeln als
                   <select value={actAs} onChange={(e) => setActAs(e.target.value as Side)} style={{ ...inputStyle, width: 140 }}>
@@ -298,8 +330,12 @@ export default function FeldzugView() {
               data={data}
               regionEdit={lead && tab === "gebiet" && setup}
               selected={selected}
-              onSelect={setSelected}
+              onSelect={selectSystem}
               busy={busy}
+              hint={movePick ? `Ziel für ${movePick.unitIds.length} Einheit(en) auf der Karte anklicken (Esc: abbrechen)` : null}
+              onCancel={() => setMovePick(null)}
+              arrows={(data.orders ?? []).filter((o) => o.kind === "move" && (!mySide || o.side === mySide)).map((o) => ({ from: o.data.systemId ?? "", to: o.data.to ?? "", side: o.side }))}
+              supplied={running ? new Set(SIDES.flatMap((x) => data.supply[x]?.ids ?? [])) : null}
               onRegion={(ids) => void post({ op: "setRegion", id: campaignId, systemIds: ids }, refresh)}
               sidebar={
                 lead && tab === "gebiet" ? (
@@ -309,15 +345,22 @@ export default function FeldzugView() {
                     data={data}
                     selected={selected}
                     side={actSide}
-                    canAct={!!setup && (lead || !!mySide)}
+                    canAct={!!(setup || running) && (lead || !!mySide)}
                     busy={busy}
                     op={op}
+                    planned={planned}
+                    onMove={(from, unitIds) => setMovePick({ from, unitIds })}
                   />
                 )
               }
             />
           )}
           {!galaxy && <div className="panel">Galaxie wird geladen…</div>}
+
+          {(tab === "karte" || !lead) && running && (
+            <TurnPanel data={data} side={actSide} lead={lead} busy={busy} op={op} onSelect={setSelected}
+              onEndTurn={() => void post({ op: "endTurn", id: campaignId, turn: data.campaign.turn }, refresh)} />
+          )}
 
           {(tab === "karte" || !lead) && (
             <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 16, alignItems: "flex-start" }}>
@@ -395,6 +438,10 @@ function CampaignMap({
   onRegion,
   busy,
   sidebar,
+  hint,
+  onCancel,
+  arrows,
+  supplied,
 }: {
   galaxy: Galaxy;
   data: CampaignView;
@@ -404,6 +451,10 @@ function CampaignMap({
   onRegion: (ids: string[]) => void;
   busy: boolean;
   sidebar: React.ReactNode;
+  hint: string | null;
+  onCancel: () => void;
+  arrows: Array<{ from: string; to: string; side: Side }>;
+  supplied: Set<string> | null;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -517,6 +568,31 @@ function CampaignMap({
       }
     }
 
+    // Geplante Bewegungen
+    for (const a of arrows) {
+      const p = byId.get(a.from);
+      const q = byId.get(a.to);
+      if (!p || !q) continue;
+      const [x1, y1] = toScreen(p.x, p.y);
+      const [x2, y2] = toScreen(q.x, q.y);
+      ctx.strokeStyle = SIDE_COLOR[a.side];
+      ctx.lineWidth = 2;
+      ctx.setLineDash([7, 5]);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const ang = Math.atan2(y2 - y1, x2 - x1);
+      ctx.fillStyle = SIDE_COLOR[a.side];
+      ctx.beginPath();
+      ctx.moveTo(x2 - Math.cos(ang) * 10, y2 - Math.sin(ang) * 10);
+      ctx.lineTo(x2 - Math.cos(ang) * 22 - Math.sin(ang) * 6, y2 - Math.sin(ang) * 22 + Math.cos(ang) * 6);
+      ctx.lineTo(x2 - Math.cos(ang) * 22 + Math.sin(ang) * 6, y2 - Math.sin(ang) * 22 - Math.cos(ang) * 6);
+      ctx.fill();
+      ctx.lineWidth = 1;
+    }
+
     // Feldzug-Systeme
     for (const s of data.systems) {
       const [x, y] = toScreen(s.x, s.y);
@@ -541,6 +617,14 @@ function CampaignMap({
         ctx.strokeStyle = SIDE_COLOR[s.hq];
         ctx.lineWidth = 2;
         ctx.strokeRect(x - r - 4, y - r - 4, (r + 4) * 2, (r + 4) * 2);
+      }
+      if (supplied && s.owner && s.owner !== "?" && !supplied.has(s.id) && supplied.size > 0) {
+        // Ohne Nachschubverbindung zum HQ
+        ctx.strokeStyle = "#f0a030";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([2, 3]);
+        ctx.strokeRect(x - r - 2, y - r - 2, (r + 2) * 2, (r + 2) * 2);
+        ctx.setLineDash([]);
       }
       if (s.contested) {
         ctx.strokeStyle = "rgba(255,70,60,0.9)";
@@ -591,7 +675,16 @@ function CampaignMap({
       ctx.strokeStyle = "rgba(240,200,80,0.9)";
       ctx.strokeRect(Math.min(box.x0, box.x1), Math.min(box.y0, box.y1), Math.abs(box.x1 - box.x0), Math.abs(box.y1 - box.y0));
     }
-  }, [galaxy, data, regionEdit, pending, selected, view, size, box, toScreen, campaignIds, unitsAt]);
+  }, [galaxy, data, regionEdit, pending, selected, view, size, box, toScreen, campaignIds, unitsAt, arrows, supplied, byId]);
+
+  useEffect(() => {
+    if (!hint) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [hint, onCancel]);
 
   const nearest = (sx: number, sy: number) => {
     let best: ViewSystem | null = null;
@@ -652,12 +745,18 @@ function CampaignMap({
               </button>
             </div>
             <div className="subtitle" style={{ margin: "6px 0 0" }}>
-              Linke Maustaste ziehen: Systeme hinzufügen, mit Umschalt: entfernen. Rechte Maustaste: verschieben. Übernehmen setzt HQs
+              Klick: System wählen (für das HQ). Linke Maustaste ziehen: Systeme hinzufügen, mit Umschalt: entfernen. Rechte Maustaste: verschieben. Übernehmen setzt HQs
               und alle Käufe zurück.
             </div>
           </div>
         )}
-        <div ref={wrapRef} className="panel" style={{ padding: 0, overflow: "hidden" }}>
+        {hint && (
+          <div className="notice ok" style={{ marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            {hint}
+            <button onClick={onCancel}>Abbrechen</button>
+          </div>
+        )}
+        <div ref={wrapRef} className="panel" style={{ padding: 0, overflow: "hidden", cursor: hint ? "crosshair" : undefined }}>
           <canvas
             ref={canvasRef}
             width={size.w}
@@ -683,6 +782,12 @@ function CampaignMap({
             }}
             onMouseUp={(e) => {
               const [x, y] = canvasPos(e);
+              if (box && Math.abs(x - box.x0) + Math.abs(y - box.y0) < 6) {
+                // Kurzer Klick ohne Ziehen: System wählen (z. B. fürs HQ)
+                setBox(null);
+                onSelect(nearest(x, y)?.id ?? null);
+                return;
+              }
               if (box) {
                 const [ax, ay] = toWorld(Math.min(box.x0, x), Math.max(box.y0, y));
                 const [bx, by] = toWorld(Math.max(box.x0, x), Math.min(box.y0, y));
@@ -716,7 +821,7 @@ function CampaignMap({
         <div className="subtitle" style={{ marginTop: 6 }}>
           <span style={{ color: SIDE_COLOR.republik }}>●</span> Republik <span style={{ color: SIDE_COLOR.kus }}>●</span> KUS{" "}
           <span style={{ color: "#8a93a6" }}>●</span> neutral <span style={{ color: "#2a2f3a" }}>●</span> unbekannt ·{" "}
-          <span style={{ color: "#6fdc8c" }}>◌</span> besetzbar · □ Hauptquartier · Größe = Systemwert · Zahlen = Mannstärke
+          <span style={{ color: "#6fdc8c" }}>◌</span> besetzbar · □ Hauptquartier · <span style={{ color: "#f0a030" }}>⬚</span> ohne Nachschub · Größe = Systemwert · Zahlen = Mannstärke
           {byId.size === 0 && " · Noch kein Gebiet gewählt"}
         </div>
       </div>
@@ -736,6 +841,8 @@ function SystemPanel({
   canAct,
   busy,
   op,
+  planned,
+  onMove,
 }: {
   data: CampaignView;
   selected: string | null;
@@ -743,12 +850,17 @@ function SystemPanel({
   canAct: boolean;
   busy: boolean;
   op: (o: string, extra?: Record<string, unknown>) => Promise<unknown>;
+  planned: Set<number>;
+  onMove: (from: string, unitIds: number[]) => void;
 }) {
   const sys = data.systems.find((s) => s.id === selected);
   const [buyType, setBuyType] = useState("");
   const [count, setCount] = useState(1);
+  const [moveCount, setMoveCount] = useState<Record<string, number>>({});
+  useEffect(() => setMoveCount({}), [selected]);
   if (!sys) return <div className="panel">System auf der Karte anklicken.</div>;
 
+  const running = data.campaign.status === "running";
   const units = data.units.filter((u) => u.systemId === sys.id);
   const settings = data.campaign.settings;
   const hq = data.sides.find((s) => s.side === side)?.hq;
@@ -766,12 +878,21 @@ function SystemPanel({
   // Spielleitung: besetzbar, wenn neutral (Verbindung prüft der Server)
   const canOccupy = canAct && sys.owner === null && (sys.reachable || lead);
 
-  // Einheiten gruppiert nach Seite und Typ
+  // Zug: Aktionen und freie Punkte
+  const myOrders = data.orders.filter((o) => o.side === side);
+  const free = points - myOrders.reduce((a, o) => a + (o.data.cost ?? 0), 0);
+  const slotsLeft = settings.actionsPerTurn - myOrders.length;
+  const order = (o: Record<string, unknown>) => op("order", { order: o });
+
+  // Einheiten gruppiert nach Seite, Typ und Zustand
   const groups = new Map<string, ViewUnit[]>();
   for (const u of units) {
-    const k = `${u.side}|${u.type}`;
+    const state = u.status === "training" ? "training" : planned.has(u.id) ? "planned" : "ready";
+    const k = `${u.side}|${u.type}|${state}`;
     groups.set(k, [...(groups.get(k) ?? []), u]);
   }
+  const movable = (k: string) => running && canAct && k.startsWith(`${side}|`) && k.endsWith("|ready");
+  const moveIds = [...groups.entries()].flatMap(([k, list]) => (movable(k) ? list.slice(0, moveCount[k] ?? 0).map((u) => u.id) : []));
 
   return (
     <div className="panel">
@@ -782,8 +903,9 @@ function SystemPanel({
           {sys.owner === "?" ? "unbekannt" : sys.owner ? SIDE_NAME[sys.owner] : "neutral"}
         </b>
         {sys.hq && <> · Hauptquartier {SIDE_NAME[sys.hq]}</>}
+        {sys.contested && <b style={{ color: "#ff5a46" }}> · umkämpft</b>}
         <br />
-        Systemwert {sys.tier} · Einkommen {sys.tier * settings.incomePerTier}/Zug
+        Systemwert {sys.tier} · Einkommen {sys.tier * settings.incomePerTier + sys.traits.length * settings.traitBonus}/Zug
         {sys.fort != null && sys.fort > 0 && <> · Befestigung {sys.fort}</>}
         {sys.traits.length > 0 && (
           <>
@@ -797,23 +919,74 @@ function SystemPanel({
       {groups.size === 0 && <div className="subtitle">{sys.owner === "?" ? "Keine Aufklärung" : "Keine bekannten Einheiten"}</div>}
       {[...groups.entries()].map(([k, list]) => {
         const u = list[0];
-        const own = u.side === side || lead;
+        const state = k.split("|")[2];
         return (
-          <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, padding: "3px 0" }}>
+          <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, fontSize: 14, padding: "3px 0" }}>
             <span>
               <span style={{ color: SIDE_COLOR[u.side] }}>●</span> {list.length}× {u.name}
-              <span style={{ color: "var(--text-muted)" }}> ({Math.round(list.reduce((a, x) => a + x.men * x.strength, 0))} Mann)</span>
+              <span style={{ color: "var(--text-muted)" }}>
+                {" "}
+                ({u.category === "ship" ? "Schiff" : `${Math.round(list.reduce((a, x) => a + x.men * x.strength, 0))} Mann`}
+                {state === "training" ? ", in Bau" : state === "planned" ? ", hat Befehl" : ""})
+              </span>
             </span>
-            {canAct && own && u.side === side && (
+            {canAct && !running && u.side === side && (
               <button style={{ padding: "2px 8px" }} disabled={busy} onClick={() => void op("sell", { unitId: list[list.length - 1].id })}>
                 Auflösen
               </button>
+            )}
+            {movable(k) && (
+              <input
+                type="number"
+                min={0}
+                max={list.length}
+                value={moveCount[k] ?? 0}
+                title="Anzahl verlegen"
+                onChange={(e) => setMoveCount({ ...moveCount, [k]: Math.max(0, Math.min(list.length, Number(e.target.value) || 0)) })}
+                style={{ ...inputStyle, width: 64, padding: "2px 6px" }}
+              />
             )}
           </div>
         );
       })}
 
-      {canAct && (
+      {canAct && running && (
+        <>
+          <h4>
+            Befehle ({SIDE_NAME[side]}) · {Math.max(0, slotsLeft)} von {settings.actionsPerTurn} Aktionen frei · {free.toLocaleString("de-DE")} Punkte frei
+          </h4>
+          {slotsLeft <= 0 && <div className="subtitle">Alle Aktionen dieses Zugs sind verplant.</div>}
+          {slotsLeft > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {moveIds.length > 0 && (
+                <button className="primary" disabled={busy} onClick={() => onMove(sys.id, moveIds)}>
+                  {moveIds.length} Einheit(en) verlegen - Ziel wählen
+                </button>
+              )}
+              {[...groups.keys()].some(movable) && moveIds.length === 0 && (
+                <div className="subtitle">Zum Verlegen oben die Anzahl je Einheit eintragen. Schiffe nehmen Bodentruppen mit (Laderaum).</div>
+              )}
+              {canOccupy && (
+                <button disabled={busy || free < occupyCost} onClick={() => void order({ kind: "occupy", systemId: sys.id })}>
+                  Besetzen ({occupyCost} Punkte, mit Garnison)
+                </button>
+              )}
+              {sys.owner === side && (sys.fort ?? 0) < settings.fortMax && (
+                <button disabled={busy || free < settings.fortifyCost} onClick={() => void order({ kind: "fortify", systemId: sys.id })}>
+                  Befestigen auf Stufe {(sys.fort ?? 0) + 1} ({settings.fortifyCost} Punkte)
+                </button>
+              )}
+              {sys.owner !== side && (
+                <button disabled={busy} onClick={() => void order({ kind: "scout", systemId: sys.id })}>
+                  Aufklären
+                </button>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {canAct && !running && (
         <>
           <h4>Aufbau ({SIDE_NAME[side]}, {points.toLocaleString("de-DE")} Punkte)</h4>
           {canOccupy && (
@@ -827,32 +1000,147 @@ function SystemPanel({
               Aufgeben (+{occupyCost})
             </button>
           )}
-          {sys.owner === side && buildable.length > 0 && chosen && (
-            <div style={{ marginTop: 8 }}>
-              <Field label="Einheit aufstellen">
-                <select value={chosen.key} onChange={(e) => setBuyType(e.target.value)} style={inputStyle}>
-                  {buildable.map((t) => (
-                    <option key={t.key} value={t.key}>
-                      {t.name} - {t.cost} P ({t.category === "ship" ? "Schiff" : `${t.men} Mann`})
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <div className="button-row">
-                <input type="number" min={1} max={50} value={count} onChange={(e) => setCount(Math.max(1, Math.min(50, Number(e.target.value) || 1)))} style={{ ...inputStyle, width: 80 }} />
-                <button className="primary" disabled={busy || points < chosen.cost * count} onClick={() => void op("buy", { systemId: sys.id, type: chosen.key, count })}>
-                  Kaufen ({chosen.cost * count} P)
-                </button>
-              </div>
-              <div className="subtitle" style={{ marginTop: 6 }}>
-                Angriff {chosen.attack} · Verteidigung {chosen.defense}
-                {chosen.category === "ship" ? ` · Tempo ${chosen.speed} · Laderaum ${chosen.capacity}` : ""} · Bauzeit {chosen.buildTurns} Züge
-              </div>
-            </div>
-          )}
-          {sys.owner === side && buildable.length === 0 && <div className="subtitle">Hier kann nichts aufgestellt werden (HQ, Werften, Fabrikwelten).</div>}
         </>
       )}
+
+      {canAct && (running ? slotsLeft > 0 : true) && sys.owner === side && buildable.length > 0 && chosen && (
+        <div style={{ marginTop: 8 }}>
+          <Field label={running ? "Bauen / ausbilden (1 Aktion)" : "Einheit aufstellen"}>
+            <select value={chosen.key} onChange={(e) => setBuyType(e.target.value)} style={inputStyle}>
+              {buildable.map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.name} - {t.cost} P ({t.category === "ship" ? "Schiff" : `${t.men} Mann`})
+                </option>
+              ))}
+            </select>
+          </Field>
+          <div className="button-row">
+            <input type="number" min={1} max={50} value={count} onChange={(e) => setCount(Math.max(1, Math.min(50, Number(e.target.value) || 1)))} style={{ ...inputStyle, width: 80 }} />
+            {running ? (
+              <button className="primary" disabled={busy || free < chosen.cost * count} onClick={() => void order({ kind: "build", systemId: sys.id, type: chosen.key, count })}>
+                In Auftrag geben ({chosen.cost * count} P)
+              </button>
+            ) : (
+              <button className="primary" disabled={busy || points < chosen.cost * count} onClick={() => void op("buy", { systemId: sys.id, type: chosen.key, count })}>
+                Kaufen ({chosen.cost * count} P)
+              </button>
+            )}
+          </div>
+          <div className="subtitle" style={{ marginTop: 6 }}>
+            Angriff {chosen.attack} · Verteidigung {chosen.defense}
+            {chosen.category === "ship" ? ` · Tempo ${chosen.speed} · Laderaum ${chosen.capacity}` : ""} · Bauzeit {chosen.buildTurns} Züge
+            {!running && " (im Aufbau sofort bereit)"}
+          </div>
+        </div>
+      )}
+      {canAct && sys.owner === side && buildable.length === 0 && <div className="subtitle">Hier kann nichts gebaut werden (HQ, Werften, Fabrikwelten).</div>}
+    </div>
+  );
+}
+
+const KIND_NAME: Record<string, string> = { move: "Verlegen", build: "Bauen", fortify: "Befestigen", scout: "Aufklären", occupy: "Besetzen" };
+
+/** Zug: geplante Befehle, Bereitschaft, Gefechte; Spielleitung beendet den Zug */
+function TurnPanel({
+  data,
+  side,
+  lead,
+  busy,
+  op,
+  onSelect,
+  onEndTurn,
+}: {
+  data: CampaignView;
+  side: Side;
+  lead: boolean;
+  busy: boolean;
+  op: (o: string, extra?: Record<string, unknown>) => Promise<unknown>;
+  onSelect: (id: string) => void;
+  onEndTurn: () => void;
+}) {
+  const [confirm, setConfirm] = useState(false);
+  const shown = lead ? SIDES : [side];
+  const name = (id?: string) => data.systems.find((s) => s.id === id)?.name ?? id ?? "";
+  const open = data.battles.filter((b) => b.status !== "done");
+
+  return (
+    <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 16, alignItems: "flex-start" }}>
+      {shown.map((s) => {
+        const orders = data.orders.filter((o) => o.side === s);
+        const info = data.sides.find((x) => x.side === s);
+        const sup = data.supply[s];
+        return (
+          <div key={s} className="panel" style={{ flex: 1, minWidth: 320 }}>
+            <h3 style={{ marginTop: 0, color: SIDE_COLOR[s] }}>
+              Zug {data.campaign.turn} · Befehle {SIDE_NAME[s]} ({orders.length}/{data.campaign.settings.actionsPerTurn})
+            </h3>
+            {orders.length === 0 && <div className="subtitle">Noch keine Befehle. System auf der Karte wählen.</div>}
+            {orders.map((o) => (
+              <div key={o.slot} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, padding: "3px 0" }}>
+                <span style={{ cursor: "pointer" }} onClick={() => o.data.systemId && onSelect(o.data.systemId)}>
+                  <b>{o.slot}.</b> {KIND_NAME[o.kind] ?? o.kind}: {o.data.label ?? name(o.data.systemId)}
+                  {o.data.cost ? <span style={{ color: "var(--text-muted)" }}> ({o.data.cost} P)</span> : null}
+                  {o.data.distance ? <span style={{ color: "var(--text-muted)" }}> ({o.data.distance} pc)</span> : null}
+                </span>
+                <button style={{ padding: "2px 8px" }} disabled={busy} onClick={() => void op("orderRemove", { slot: o.slot, ...(lead ? { side: s } : {}) })}>
+                  Entfernen
+                </button>
+              </div>
+            ))}
+            {sup && (
+              <div className="subtitle" style={{ marginTop: 8 }}>
+                Einkommen nächster Zug: +{sup.total} aus {sup.supplied} versorgten Systemen
+                {sup.cut > 0 && <span style={{ color: "#f0a030" }}> · {sup.cut} ohne Nachschub</span>}
+              </div>
+            )}
+            <div className="button-row" style={{ marginTop: 8 }}>
+              <button className={info?.ready ? undefined : "primary"} disabled={busy} onClick={() => void op("ready", { ready: !info?.ready, ...(lead ? { side: s } : {}) })}>
+                {info?.ready ? "Bereit zurücknehmen" : "Zug fertig geplant"}
+              </button>
+              <span className="subtitle" style={{ margin: 0, alignSelf: "center" }}>{info?.ready ? "bereit" : "plant noch"}</span>
+            </div>
+          </div>
+        );
+      })}
+
+      <div className="panel" style={{ flex: 1, minWidth: 300 }}>
+        <h3 style={{ marginTop: 0 }}>Gefechte</h3>
+        {open.length === 0 && <div className="subtitle">Keine offenen Gefechte.</div>}
+        {open.map((b) => (
+          <div key={b.id} style={{ fontSize: 14, padding: "3px 0", cursor: "pointer" }} onClick={() => onSelect(b.systemId)}>
+            <span style={{ color: "#ff5a46" }}>⚔</span> {name(b.systemId)} - {b.kind === "space" ? "Raumschlacht" : "Bodenkampf"}, {SIDE_NAME[b.attacker]} greift an
+            <span style={{ color: "var(--text-muted)" }}> (seit Zug {b.turn}, {b.mode === "spieler" ? "Spieler" : "Simulation"})</span>
+          </div>
+        ))}
+        {lead && (
+          <>
+            <h4>Spielleitung</h4>
+            <p className="subtitle">
+              Bereit: {data.sides.map((x) => `${SIDE_NAME[x.side]} ${x.ready ? "ja" : "nein"}`).join(", ")}. Beim Zugende werden alle Befehle
+              gleichzeitig ausgewertet.
+            </p>
+            {!confirm ? (
+              <button className="primary" disabled={busy} onClick={() => setConfirm(true)}>
+                Zug {data.campaign.turn} beenden…
+              </button>
+            ) : (
+              <div className="button-row">
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() => {
+                    setConfirm(false);
+                    onEndTurn();
+                  }}
+                >
+                  Jetzt auswerten{data.sides.some((x) => !x.ready) ? " (nicht alle bereit)" : ""}
+                </button>
+                <button onClick={() => setConfirm(false)}>Abbrechen</button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -998,6 +1286,10 @@ const SETTING_FIELDS: Array<{ key: keyof Settings; label: string; hint?: string;
   { key: "routeMajor", label: "Faktor Hauptrouten", step: 0.05 },
   { key: "routeMinor", label: "Faktor Nebenrouten", step: 0.05 },
   { key: "junctionDist", label: "Umstieg zwischen Routen (pc)" },
+  { key: "fortifyCost", label: "Befestigen: Kosten" },
+  { key: "fortMax", label: "Höchste Befestigung" },
+  { key: "hqBonus", label: "Einkommen: Bonus HQ" },
+  { key: "traitBonus", label: "Einkommen: je Besonderheit" },
 ];
 
 function SettingsPanel({

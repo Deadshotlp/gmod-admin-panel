@@ -269,7 +269,7 @@ export async function createCampaign(name: string, settings: Settings): Promise<
       "VALUES (?, ?, '{}', '', ?, ?, ?, ?)",
     [name, JSON.stringify(settings), settings.startPoints, settings.startPoints, now(), now()],
   );
-  return Number((result as { insertId?: number }).insertId ?? 0);
+  return Number(result.insertId ?? 0);
 }
 
 export async function updateCampaign(c: Campaign): Promise<void> {
@@ -309,7 +309,7 @@ export async function insertUnit(id: number, u: Omit<Unit, "id">): Promise<numbe
     "INSERT INTO `pd_fz_units` (`campaign_id`, `side`, `type`, `system_id`, `strength`, `xp`, `status`, `ready_turn`, `fleet_id`, `naval_ship_id`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     [id, u.side, u.type, u.systemId, u.strength, u.xp, u.status, u.readyTurn, u.fleetId, u.navalShipId],
   );
-  return Number((result as { insertId?: number }).insertId ?? 0);
+  return Number(result.insertId ?? 0);
 }
 
 export async function saveUnit(u: Unit): Promise<void> {
@@ -350,4 +350,89 @@ export async function deleteCampaign(id: number): Promise<void> {
     await execute(`DELETE FROM \`${t}\` WHERE \`campaign_id\` = ?`, [id]);
   }
   await execute("DELETE FROM `pd_fz_campaigns` WHERE `id` = ?", [id]);
+}
+
+/* -------------------------------------------------------------------- */
+/* Befehle und Gefechte                                                  */
+/* -------------------------------------------------------------------- */
+
+export type OrderKind = "move" | "build" | "fortify" | "scout" | "occupy";
+
+export interface Order {
+  side: Side;
+  slot: number;
+  kind: OrderKind;
+  data: Record<string, unknown>;
+  result: string;
+}
+
+export async function loadOrders(id: number, turn: number, side: Side | null): Promise<Order[]> {
+  const rows = await query<{ side: string; slot: number; kind: string; data_json: string; result: string }>(
+    "SELECT `side`, `slot`, `kind`, `data_json`, `result` FROM `pd_fz_orders` WHERE `campaign_id` = ? AND `turn` = ?" +
+      (side ? " AND `side` = ?" : "") +
+      " ORDER BY `side`, `slot`",
+    side ? [id, turn, side] : [id, turn],
+  );
+  return rows.map((r) => ({
+    side: r.side as Side,
+    slot: Number(r.slot),
+    kind: r.kind as OrderKind,
+    data: parse<Record<string, unknown>>(r.data_json, {}),
+    result: r.result ?? "",
+  }));
+}
+
+export async function saveOrder(id: number, turn: number, o: Order): Promise<void> {
+  await execute(
+    "REPLACE INTO `pd_fz_orders` (`campaign_id`, `turn`, `side`, `slot`, `kind`, `data_json`, `result`) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    [id, turn, o.side, o.slot, o.kind, JSON.stringify(o.data), o.result],
+  );
+}
+
+export async function deleteOrder(id: number, turn: number, side: Side, slot: number): Promise<void> {
+  await execute("DELETE FROM `pd_fz_orders` WHERE `campaign_id` = ? AND `turn` = ? AND `side` = ? AND `slot` = ?", [id, turn, side, slot]);
+}
+
+export interface Battle {
+  id: number;
+  turn: number;
+  systemId: string;
+  kind: "ground" | "space";
+  attacker: Side;
+  mode: "ki" | "spieler";
+  status: "open" | "scheduled" | "done";
+  seed: number;
+  result: Record<string, unknown>;
+  scheduledAt: number;
+}
+
+export async function loadBattles(id: number): Promise<Battle[]> {
+  const rows = await query<Record<string, unknown>>("SELECT * FROM `pd_fz_battles` WHERE `campaign_id` = ? ORDER BY `id` DESC", [id]);
+  return rows.map((r) => ({
+    id: Number(r.id),
+    turn: Number(r.turn),
+    systemId: String(r.system_id),
+    kind: r.kind as Battle["kind"],
+    attacker: r.attacker as Side,
+    mode: r.mode as Battle["mode"],
+    status: r.status as Battle["status"],
+    seed: Number(r.seed),
+    result: parse<Record<string, unknown>>(String(r.result_json ?? ""), {}),
+    scheduledAt: Number(r.scheduled_at),
+  }));
+}
+
+export async function insertBattle(id: number, b: Omit<Battle, "id">): Promise<number> {
+  const result = await execute(
+    "INSERT INTO `pd_fz_battles` (`campaign_id`, `turn`, `system_id`, `kind`, `attacker`, `mode`, `status`, `seed`, `result_json`, `scheduled_at`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [id, b.turn, b.systemId, b.kind, b.attacker, b.mode, b.status, b.seed, JSON.stringify(b.result), b.scheduledAt],
+  );
+  return Number(result.insertId ?? 0);
+}
+
+export async function saveBattle(b: Battle): Promise<void> {
+  await execute(
+    "UPDATE `pd_fz_battles` SET `kind` = ?, `mode` = ?, `status` = ?, `result_json` = ?, `scheduled_at` = ? WHERE `id` = ?",
+    [b.kind, b.mode, b.status, JSON.stringify(b.result), b.scheduledAt, b.id],
+  );
 }

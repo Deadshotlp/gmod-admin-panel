@@ -60,6 +60,12 @@ export interface Settings {
   routeMajor: number;
   routeMinor: number;
   junctionDist: number;
+  /** Befestigen: Kosten je Stufe, höchste Stufe */
+  fortifyCost: number;
+  fortMax: number;
+  /** Einkommen zusätzlich: Hauptquartier, je Besonderheit (Werft, Fabrik ...) */
+  hqBonus: number;
+  traitBonus: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -73,6 +79,10 @@ export const DEFAULT_SETTINGS: Settings = {
   routeMajor: 0.5,
   routeMinor: 0.7,
   junctionDist: 25,
+  fortifyCost: 300,
+  fortMax: 3,
+  hqBonus: 300,
+  traitBonus: 60,
 };
 
 /** Startkatalog (im Panel änderbar). Werte je Kompanie bzw. Schiff. */

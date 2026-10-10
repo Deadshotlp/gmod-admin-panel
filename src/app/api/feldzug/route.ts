@@ -22,7 +22,12 @@ import {
   setCommanders,
   setRegion,
   updateCampaign,
+  loadOrders,
+  saveOrder,
+  deleteOrder,
+  loadBattles,
 } from "@/lib/feldzug/db";
+import { incomeOf, orderCost, resolveTurn, suppliedSystems, validateOrder } from "@/lib/feldzug/turn";
 import type { CampaignState } from "@/lib/feldzug/db";
 import { buildHopGraph } from "@/lib/feldzug/routing";
 import type { RouteLine } from "@/lib/feldzug/routing";
@@ -159,8 +164,17 @@ export async function GET(request: Request) {
     }
 
     const reports = await loadReports(state.campaign.id, viewer.kind === "side" ? viewer.side : null);
+    const sideFilter = viewer.kind === "side" ? viewer.side : null;
+    const orders = state.campaign.status === "running" ? await loadOrders(state.campaign.id, state.campaign.turn, sideFilter) : [];
+    // Gefechte: nur in Systemen, die die Seite einsehen kann
+    const visibleIds = new Set(view.systems.filter((x) => x.owner !== "?").map((x) => x.id));
+    const battles = (await loadBattles(state.campaign.id)).filter((b) => !sideFilter || visibleIds.has(b.systemId)).slice(0, 40);
+    const shownSides = sideFilter ? [sideFilter] : SIDES;
     return NextResponse.json({
       ...view,
+      orders,
+      battles: battles.map((b) => ({ ...b, seed: undefined })),
+      supply: Object.fromEntries(shownSides.map((side) => [side, { ...incomeOf(state, side), ids: [...suppliedSystems(state, side)] }])),
       sides: view.sides.map((s) => ({ ...s, commanders: s.commanders.map((id) => ({ steamId: id, name: names.get(id) ?? id })) })),
       reports,
       unitTypes: viewer.kind === "side" ? types.filter((t) => t.side === viewer.side) : types,
@@ -205,6 +219,10 @@ const settingsSchema = z.object({
   routeMajor: z.number().min(0.05).max(1),
   routeMinor: z.number().min(0.05).max(1),
   junctionDist: z.number().min(0).max(500),
+  fortifyCost: z.number().int().min(0).max(100000),
+  fortMax: z.number().int().min(0).max(10),
+  hqBonus: z.number().int().min(0).max(100000),
+  traitBonus: z.number().int().min(0).max(100000),
 });
 
 const schema = z.discriminatedUnion("op", [
@@ -223,6 +241,22 @@ const schema = z.discriminatedUnion("op", [
   z.object({ op: z.literal("sell"), id: z.number().int(), side: sideSchema.optional(), unitId: z.number().int() }),
   z.object({ op: z.literal("ready"), id: z.number().int(), side: sideSchema.optional(), ready: z.boolean() }),
   z.object({ op: z.literal("start"), id: z.number().int() }),
+  z.object({
+    op: z.literal("order"),
+    id: z.number().int(),
+    side: sideSchema.optional(),
+    slot: z.number().int().min(1).max(20).optional(),
+    order: z.object({
+      kind: z.enum(["move", "build", "fortify", "scout", "occupy"]),
+      systemId: sysId.optional(),
+      to: sysId.optional(),
+      unitIds: z.array(z.number().int()).max(500).optional(),
+      type: z.string().max(64).optional(),
+      count: z.number().int().min(1).max(50).optional(),
+    }),
+  }),
+  z.object({ op: z.literal("orderRemove"), id: z.number().int(), side: sideSchema.optional(), slot: z.number().int() }),
+  z.object({ op: z.literal("endTurn"), id: z.number().int(), turn: z.number().int() }),
 ]);
 
 type Input = z.infer<typeof schema>;
@@ -501,6 +535,54 @@ async function runCampaignOp(user: PanelUser, input: Input, requireAdmin: () => 
       for (const side of SIDES) await addReport(c.id, 1, side, "turn", "Der Feldzug beginnt. Zug 1.");
       await audit("start", { turn: 1 });
       return "Feldzug gestartet - Zug 1";
+    }
+
+    case "order": {
+      const side = sideFor(input.side);
+      const existing = await loadOrders(c.id, c.turn, side);
+      const others = existing.filter((o) => o.slot !== input.slot);
+      let slot = input.slot;
+      if (!slot) {
+        const used = new Set(existing.map((o) => o.slot));
+        slot = 1;
+        while (used.has(slot)) slot++;
+      }
+      if (slot > c.settings.actionsPerTurn) throw new RuleError(`Nur ${c.settings.actionsPerTurn} Aktionen je Zug`);
+      const v = validateOrder(state, side, input.order, others, typeMap);
+      await saveOrder(c.id, c.turn, { side, slot, kind: v.kind, data: { ...v.data, label: v.label }, result: "" });
+      if (c.ready[side]) {
+        c.ready[side] = false;
+        await updateCampaign(c);
+      }
+      return `Aktion ${slot}: ${v.label}`;
+    }
+
+    case "orderRemove": {
+      const side = sideFor(input.side);
+      if (c.status !== "running") throw new RuleError("Der Feldzug läuft nicht");
+      await deleteOrder(c.id, c.turn, side, input.slot);
+      if (c.ready[side]) {
+        c.ready[side] = false;
+        await updateCampaign(c);
+      }
+      return "Aktion entfernt";
+    }
+
+    case "endTurn": {
+      requireAdmin();
+      if (c.status !== "running") throw new RuleError("Der Feldzug läuft nicht");
+      // Schutz gegen doppeltes Klicken / veraltete Ansicht
+      if (input.turn !== c.turn) throw new RuleError(`Zug ${input.turn} ist schon ausgewertet`);
+      const orders = await loadOrders(c.id, c.turn, null);
+      // Punkte je Seite: geplante Kosten dürfen den Stand nicht übersteigen (wurde beim Eintragen geprüft)
+      for (const side of SIDES) {
+        const planned = orders.filter((o) => o.side === side).reduce((a, o) => a + orderCost(o), 0);
+        if (planned > c.points[side]) throw new RuleError(`${SIDE_NAME[side]}: geplante Kosten übersteigen die Punkte`);
+      }
+      const turn = c.turn;
+      await resolveTurn(state, orders, typeMap);
+      await audit("endTurn", { turn, orders: orders.length });
+      return `Zug ${turn} ausgewertet - jetzt Zug ${c.turn}`;
     }
 
     default:

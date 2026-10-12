@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import Shell from "@/components/Shell";
 import WaffenManager from "@/components/WaffenManager";
+import AusruestungBodygroups from "@/components/AusruestungBodygroups";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,9 @@ export default async function WaffenPage() {
       </p>
 
       <WaffenManager user={user} />
+
+      <h2 style={{ marginTop: 32 }}>Ausrüstung und Bodygroups</h2>
+      <AusruestungBodygroups user={user} />
     </Shell>
   );
 }

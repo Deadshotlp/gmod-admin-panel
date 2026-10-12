@@ -25,7 +25,10 @@ interface ModelInfo {
 }
 
 const ANY = "*";
-const small = { ...inputStyle, padding: "4px 6px" };
+// Alle Felder einer Zeile gleich hoch und oben ausgerichtet (der Hinweis unter
+// der Bodygroup schiebt sonst nur diese Zelle nach oben)
+const small = { ...inputStyle, padding: "4px 6px", height: 34, boxSizing: "border-box" as const };
+const cell = { verticalAlign: "top" as const, paddingTop: 8 };
 
 export default function AusruestungBodygroups({ user }: { user: PanelUser }) {
   const [bindings, setBindings] = useState<Binding[]>([]);
@@ -157,10 +160,10 @@ export default function AusruestungBodygroups({ user }: { user: PanelUser }) {
               const listId = `gear-bg-${i}`;
               return (
                 <tr key={i}>
-                  <td style={{ minWidth: 170 }}>
+                  <td style={{ ...cell, minWidth: 170 }}>
                     <input list="gear-classes" value={b.class} disabled={!canEdit} onChange={(e) => update(i, { class: e.target.value })} style={small} />
                   </td>
-                  <td style={{ minWidth: 220 }}>
+                  <td style={{ ...cell, minWidth: 220 }}>
                     <select value={b.model} disabled={!canEdit} onChange={(e) => update(i, { model: e.target.value })} style={small}>
                       <option value={ANY}>Alle Models</option>
                       {models.map((m) => (
@@ -171,7 +174,7 @@ export default function AusruestungBodygroups({ user }: { user: PanelUser }) {
                       {b.model !== ANY && !models.some((m) => m.model === b.model) && <option value={b.model}>{b.model}</option>}
                     </select>
                   </td>
-                  <td style={{ minWidth: 170 }}>
+                  <td style={{ ...cell, minWidth: 170 }}>
                     <input list={listId} value={b.bodygroup} disabled={!canEdit} onChange={(e) => update(i, { bodygroup: e.target.value })} style={small} />
                     <datalist id={listId}>
                       {[...names.keys()].sort().map((n) => (
@@ -182,7 +185,7 @@ export default function AusruestungBodygroups({ user }: { user: PanelUser }) {
                     {count !== undefined && <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Werte 0–{count - 1}</div>}
                   </td>
                   {(["valueOff", "valueOn", "valueActive"] as const).map((k) => (
-                    <td key={k} style={{ width: 80 }}>
+                    <td key={k} style={{ ...cell, width: 80 }}>
                       <input
                         type="number"
                         min={k === "valueOn" ? 0 : -1}
@@ -194,9 +197,9 @@ export default function AusruestungBodygroups({ user }: { user: PanelUser }) {
                       />
                     </td>
                   ))}
-                  <td>
+                  <td style={cell}>
                     {canEdit && (
-                      <button style={{ padding: "2px 8px" }} onClick={() => setBindings(bindings.filter((_, j) => j !== i))}>
+                      <button style={{ padding: "0 10px", height: 34 }} onClick={() => setBindings(bindings.filter((_, j) => j !== i))}>
                         Entfernen
                       </button>
                     )}

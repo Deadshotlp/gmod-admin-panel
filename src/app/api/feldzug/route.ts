@@ -4,6 +4,7 @@ import { AuthError, listPanelUsers, requireUser } from "@/lib/auth";
 import type { PanelUser } from "@/lib/auth";
 import { writeAudit } from "@/lib/audit";
 import { execute, query } from "@/lib/db";
+import { reloadServer } from "@/lib/pterodactyl";
 import {
   addReport,
   createCampaign,
@@ -344,6 +345,12 @@ export async function POST(request: Request) {
 
     const id = input.id;
     const message = await withLock(id, () => runCampaignOp(user, input, requireAdmin));
+
+    // Spiel abgleichen (Schiffe, Gebiete, Lage-Konsole) - nicht abwarten, ein
+    // schlafender Server holt es spaetestens nach einer Minute selbst nach
+    if (input.op !== "rename" && input.op !== "commanders" && input.op !== "order" && input.op !== "orderRemove" && input.op !== "ready") {
+      void reloadServer("feldzug").catch(() => undefined);
+    }
     return NextResponse.json({ ok: true, message });
   } catch (error) {
     return fail(error);
@@ -391,6 +398,26 @@ async function runCampaignOp(user: PanelUser, input: Input, requireAdmin: () => 
 
     case "delete": {
       requireAdmin();
+      // Gespiegelte Gebiete zuruecksetzen, solange die Sicherung noch da ist
+      // (der Gameserver stellt sonst erst beim Feldzugende wieder her)
+      const backupRow = await query<{ territory_backup: string }>("SELECT `territory_backup` FROM `pd_fz_campaigns` WHERE `id` = ?", [c.id]);
+      const backup = backupRow[0]?.territory_backup ?? "";
+      if (backup) {
+        let rows: Array<{ kind: string; area_key: string; faction_id: string; contested: number | string }> = [];
+        try {
+          rows = (JSON.parse(backup) as { rows?: typeof rows }).rows ?? [];
+        } catch {
+          rows = [];
+        }
+        await execute("DELETE FROM `pd_naval_territory`");
+        for (const r of rows) {
+          await execute(
+            "INSERT INTO `pd_naval_territory` (`kind`, `area_key`, `faction_id`, `contested`, `updated_at`) VALUES (?, ?, ?, ?, ?)",
+            [r.kind, r.area_key, r.faction_id, Number(r.contested) === 1 ? 1 : 0, Math.floor(Date.now() / 1000)],
+          );
+        }
+        void reloadServer("naval_galaxy").catch(() => undefined);
+      }
       await deleteCampaign(c.id);
       await audit("delete", { name: c.name });
       return "Feldzug gelöscht";

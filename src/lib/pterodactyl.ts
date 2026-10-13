@@ -288,6 +288,7 @@ export const RELOAD_AREAS = [
   "charakter",
   "naval",
   "naval_galaxy",
+  "feldzug",
   "all",
 ] as const;
 

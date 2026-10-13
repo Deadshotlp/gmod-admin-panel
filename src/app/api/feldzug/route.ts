@@ -215,7 +215,7 @@ const sysId = z.string().min(1).max(64);
 const unitTypeSchema = z.object({
   key: z.string().regex(/^[a-z0-9_]{2,64}$/, "Schlüssel: a-z, 0-9, _"),
   side: sideSchema,
-  category: z.enum(["infantry", "heavy", "armor", "artillery", "ship"]),
+  category: z.enum(["infantry", "heavy", "armor", "artillery", "ship", "legion", "general"]),
   name: z.string().min(1).max(128),
   men: z.number().int().min(1).max(100000),
   cost: z.number().int().min(0).max(1000000),
@@ -225,7 +225,7 @@ const unitTypeSchema = z.object({
   speed: z.number().min(0).max(100000),
   capacity: z.number().int().min(0).max(1000),
   navalClass: z.string().max(64),
-  buildAt: z.enum(["hq", "shipyard", "any"]),
+  buildAt: z.enum(["hq", "shipyard", "any", "none"]),
   position: z.number().int().min(0).max(10000),
 });
 
@@ -244,6 +244,9 @@ const settingsSchema = z.object({
   fortMax: z.number().int().min(0).max(10),
   hqBonus: z.number().int().min(0).max(100000),
   traitBonus: z.number().int().min(0).max(100000),
+  militiaPerTier: z.number().min(0).max(20),
+  attritionPerTurn: z.number().min(0).max(1),
+  maxTurns: z.number().int().min(0).max(1000),
 });
 
 const schema = z.discriminatedUnion("op", [
@@ -595,6 +598,16 @@ async function runCampaignOp(user: PanelUser, input: Input, requireAdmin: () => 
       c.turn = 1;
       c.ready = { republik: false, kus: false };
       await updateCampaign(c);
+
+      // Spielerlegion (echte Spieler) am Hauptquartier ihrer Seite aufstellen
+      for (const t of types.filter((x) => x.category === "legion")) {
+        const hq = c.hq[t.side];
+        if (hq && !state.units.some((u) => u.type === t.key)) {
+          await insertUnit(c.id, { side: t.side, type: t.key, systemId: hq, strength: 1, xp: 0, status: "ready", readyTurn: 0, fleetId: null, navalShipId: null });
+          await addReport(c.id, 1, t.side, "setup", `${t.name} am Hauptquartier aufgestellt.`);
+        }
+      }
+
       for (const side of SIDES) {
         await addReport(c.id, 1, side, "turn", "Der Feldzug beginnt. Zug 1.");
         await recordIntel(state, side, visibleSystems(state, side), 1);
@@ -671,6 +684,15 @@ async function runCampaignOp(user: PanelUser, input: Input, requireAdmin: () => 
         const planned = orders.filter((o) => o.side === side).reduce((a, o) => a + orderCost(o), 0);
         if (planned > c.points[side]) throw new RuleError(`${SIDE_NAME[side]}: geplante Kosten übersteigen die Punkte`);
       }
+      // Spielerlegion nachtragen (Feldzuege, die vor ihrer Einfuehrung starteten)
+      for (const t of types.filter((x) => x.category === "legion")) {
+        const hq = c.hq[t.side];
+        if (hq && state.systems.get(hq)?.owner === t.side && !state.units.some((u) => u.type === t.key)) {
+          const u = { side: t.side, type: t.key, systemId: hq, strength: 1, xp: 0, status: "ready" as const, readyTurn: 0, fleetId: null, navalShipId: null };
+          state.units.push({ ...u, id: await insertUnit(c.id, u) });
+        }
+      }
+
       const turn = c.turn;
       await resolveTurn(state, orders, typeMap);
       await audit("endTurn", { turn, orders: orders.length });

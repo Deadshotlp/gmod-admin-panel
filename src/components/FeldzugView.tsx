@@ -15,6 +15,7 @@ const SIDE_NAME: Record<Side, string> = { republik: "Republik", kus: "KUS" };
 const SIDE_COLOR: Record<Side, string> = { republik: "#4a8fe0", kus: "#d9583b" };
 const CATEGORY_NAME: Record<string, string> = {
   infantry: "Infanterie", heavy: "Schwere Infanterie", armor: "Panzer", artillery: "Artillerie", ship: "Schiff",
+  legion: "Spielerlegion", general: "General",
 };
 const TRAIT_NAME: Record<string, string> = { shipyard: "Werft", foundry: "Fabrikwelt", clones: "Klonwelt", capital: "Hauptwelt" };
 const STATUS_NAME: Record<string, string> = { setup: "Aufbau", running: "läuft", ended: "beendet" };
@@ -74,6 +75,9 @@ interface Settings {
   fortMax: number;
   hqBonus: number;
   traitBonus: number;
+  militiaPerTier: number;
+  attritionPerTurn: number;
+  maxTurns: number;
 }
 
 interface ListData {
@@ -478,7 +482,7 @@ interface ViewState {
   scale: number;
 }
 
-const CATEGORY_GLYPH: Record<string, string> = { infantry: "I", heavy: "S", armor: "P", artillery: "A" };
+const CATEGORY_GLYPH: Record<string, string> = { infantry: "I", heavy: "S", armor: "P", artillery: "A", legion: "L", general: "G" };
 
 /** Einheitensymbol über einem System (Treffer-Fläche für die Maus) */
 interface Chip {
@@ -1044,7 +1048,7 @@ function CampaignMap({
           )}
           <span style={{ color: SIDE_COLOR.republik }}>●</span> Republik <span style={{ color: SIDE_COLOR.kus }}>●</span> KUS{" "}
           <span style={{ color: "#8a93a6" }}>●</span> neutral <span style={{ color: "#2a2f3a" }}>●</span> unbekannt · blass = alter Bericht ·
-          gestrichelter Ring = vermutet · gestricheltes Symbol = an Bord im Orbit · <span style={{ color: "#ff5a46" }}>━</span> Front · ▲ Schiff, I/S/P/A Infanterie/Schwere/Panzer/Artillerie ·{" "}
+          gestrichelter Ring = vermutet · gestricheltes Symbol = an Bord im Orbit · <span style={{ color: "#ff5a46" }}>━</span> Front · ▲ Schiff, I/S/P/A Infanterie/Schwere/Panzer/Artillerie, L Spielerlegion, G General ·{" "}
           <span style={{ color: "#6fdc8c" }}>◌</span> besetzbar · □ Hauptquartier · <span style={{ color: "#f0a030" }}>⬚</span> ohne Nachschub
           {byId.size === 0 && " · Noch kein Gebiet gewählt"}
         </div>
@@ -1090,6 +1094,7 @@ function SystemPanel({
   const buildable = data.unitTypes.filter(
     (t) =>
       t.side === side &&
+      t.buildAt !== "none" &&
       (t.buildAt === "any" ||
         (t.buildAt === "shipyard" ? isHq || sys.traits.includes("shipyard") : isHq || sys.traits.includes("clones") || sys.traits.includes("foundry"))),
   );
@@ -1720,6 +1725,9 @@ const SETTING_FIELDS: Array<{ key: keyof Settings; label: string; hint?: string;
   { key: "fortMax", label: "Höchste Befestigung" },
   { key: "hqBonus", label: "Einkommen: Bonus HQ" },
   { key: "traitBonus", label: "Einkommen: je Besonderheit" },
+  { key: "militiaPerTier", label: "Miliz je Systemwert (Kompanien)", hint: "Neutrale Systeme verteidigen sich; 0 = kampflos einnehmbar", step: 0.5 },
+  { key: "attritionPerTurn", label: "Abnutzung ohne Nachschub", hint: "Stärkeverlust je Zug, 0,05 = 5 %", step: 0.01 },
+  { key: "maxTurns", label: "Zuglimit", hint: "Danach gewinnt der höhere Gesamt-Systemwert; 0 = aus" },
 ];
 
 function SettingsPanel({
@@ -1766,7 +1774,7 @@ function SettingsPanel({
           {SIDES.map((side) => (
             <Field key={side} label={`Garnison ${SIDE_NAME[side]}`}>
               <select value={s.garrisonType[side]} onChange={(e) => setS({ ...s, garrisonType: { ...s.garrisonType, [side]: e.target.value } })} style={inputStyle}>
-                {data.unitTypes.filter((t) => t.side === side && t.category !== "ship").map((t) => (
+                {data.unitTypes.filter((t) => t.side === side && t.category !== "ship" && t.category !== "general" && t.category !== "legion").map((t) => (
                   <option key={t.key} value={t.key}>{t.name} ({t.men} Mann)</option>
                 ))}
               </select>
@@ -1855,7 +1863,7 @@ function CatalogPanel({ types, busy, onSave, onDelete }: { types: UnitType[]; bu
                 <td>{t.defense}</td>
                 <td>{t.speed || "-"}</td>
                 <td>{t.capacity || "-"}</td>
-                <td>{t.buildAt === "shipyard" ? "Werft" : t.buildAt === "any" ? "überall" : "HQ/Fabrik"}</td>
+                <td>{t.buildAt === "shipyard" ? "Werft" : t.buildAt === "any" ? "überall" : t.buildAt === "none" ? "nicht kaufbar" : "HQ/Fabrik"}</td>
               </tr>
             ))}
           </tbody>
@@ -1894,6 +1902,7 @@ function CatalogPanel({ types, busy, onSave, onDelete }: { types: UnitType[]; bu
                 <option value="hq">HQ / Fabrikwelt</option>
                 <option value="shipyard">HQ / Werft</option>
                 <option value="any">überall</option>
+                <option value="none">nicht kaufbar</option>
               </select>
             </Field>
             <Field label="Naval-Klasse">

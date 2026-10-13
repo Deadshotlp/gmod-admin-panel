@@ -6,7 +6,7 @@
  */
 
 import { execute, query, queryOne } from "@/lib/db";
-import { DEFAULT_SETTINGS, DEFAULT_UNIT_TYPES } from "./types";
+import { ADDED_UNIT_TYPES, DEFAULT_SETTINGS, DEFAULT_UNIT_TYPES } from "./types";
 import type { CampaignStatus, CampaignSystem, HopGraph, Settings, Side, Unit, UnitType } from "./types";
 
 let ready = false;
@@ -140,6 +140,12 @@ export async function ensureFeldzugTables(): Promise<void> {
   const count = await queryOne<{ c: number }>("SELECT COUNT(*) AS c FROM `pd_fz_unit_types`");
   if (Number(count?.c ?? 0) === 0) {
     for (const t of DEFAULT_UNIT_TYPES) await saveUnitType(t);
+  } else {
+    // Spaeter dazugekommene Starttypen (Spielerlegion, Generaele) nachtragen
+    const keys = new Set((await query<{ key: string }>("SELECT `key` FROM `pd_fz_unit_types`")).map((r) => r.key));
+    for (const t of DEFAULT_UNIT_TYPES) {
+      if (ADDED_UNIT_TYPES.includes(t.key) && !keys.has(t.key)) await saveUnitType(t);
+    }
   }
   ready = true;
 }

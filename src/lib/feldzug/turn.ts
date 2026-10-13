@@ -39,7 +39,7 @@ import {
   updateCampaign,
 } from "./db";
 import type { CampaignState, Order, OrderKind } from "./db";
-import { decideBattle, newContext } from "./battle";
+import { LEGION_MIN, decideBattle, fightMilitia, isLegion, newContext } from "./battle";
 import { hopCost, pathCost } from "./routing";
 import { RuleError, canBuildAt, connectedToSide, occupyCost, otherSide, visibleSystems } from "./rules";
 import { SIDES, SIDE_NAME } from "./types";
@@ -55,6 +55,7 @@ export interface OrderInput {
 }
 
 const isShip = (types: Map<string, UnitType>, u: Unit) => types.get(u.type)?.category === "ship";
+const isGeneral = (types: Map<string, UnitType>, u: Unit) => types.get(u.type)?.category === "general";
 
 /** Punkte, die die geplanten Befehle einer Seite kosten */
 export function orderCost(o: Order): number {
@@ -389,7 +390,7 @@ export async function resolveTurn(state: CampaignState, orders: Order[], types: 
   for (const sys of state.systems.values()) {
     const here = state.units.filter((u) => u.systemId === sys.id);
     const ships = (s: Side) => here.some((u) => u.side === s && isShip(types, u));
-    const landed = (s: Side) => here.some((u) => u.side === s && !isShip(types, u) && u.status !== "orbit");
+    const landed = (s: Side) => here.some((u) => u.side === s && !isShip(types, u) && !isGeneral(types, u) && u.status !== "orbit");
     const movers = arrivals.get(sys.id);
     const attackerOf = (): Side => (sys.owner ? otherSide(sys.owner) : movers && movers.size === 1 ? [...movers][0] : "republik");
     const fight = async (kind: "space" | "ground") => {
@@ -400,7 +401,8 @@ export async function resolveTurn(state: CampaignState, orders: Order[], types: 
         systemId: sys.id,
         kind,
         attacker,
-        mode: c.settings.defaultBattleMode,
+        // Ist die Spielerlegion beteiligt, tragen echte Spieler das Gefecht aus
+        mode: here.some((u) => isLegion(types, u) && (kind === "space" ? false : u.status !== "orbit")) ? "spieler" : c.settings.defaultBattleMode,
         status: "open",
         seed: Math.floor(Math.random() * 2 ** 31),
         result: {},
@@ -420,7 +422,16 @@ export async function resolveTurn(state: CampaignState, orders: Order[], types: 
 
     // Einnahme: nur eine Seite hat gelandete Bodentruppen, System gehört ihr nicht
     const holders = SIDES.filter(landed);
-    if (holders.length === 1 && sys.owner !== holders[0]) {
+    let militiaBeaten = true;
+    if (holders.length === 1 && !sys.owner && !contested) {
+      // Neutrales System: die Miliz verteidigt sich
+      const mctx = newContext();
+      militiaBeaten = fightMilitia(state, sys.id, holders[0], types, mctx);
+      for (const side of SIDES) notes[side].push(...mctx.notes[side]);
+      for (const id of mctx.changedUnits) changedUnits.add(id);
+      for (const id of mctx.removedUnits) await deleteUnit(id);
+    }
+    if (holders.length === 1 && sys.owner !== holders[0] && militiaBeaten) {
       const side = holders[0];
       const loser = sys.owner;
       sys.owner = side;
@@ -471,6 +482,42 @@ export async function resolveTurn(state: CampaignState, orders: Order[], types: 
     }
   }
 
+  // 5b. Abnutzung ohne Nachschub: ausserhalb der Reichweite versorgter eigener
+  // Systeme verlieren Einheiten Staerke (Spielerlegion nicht unter 30 %)
+  const attrition = c.settings.attritionPerTurn ?? 0;
+  if (attrition > 0) {
+    const max = c.settings.supplyHop;
+    for (const side of SIDES) {
+      const supplied = suppliedSystems(state, side);
+      const reach = new Set(supplied);
+      for (const id of supplied) for (const [n, w] of state.graph[id] ?? []) if (w <= max) reach.add(n);
+
+      let hit = 0;
+      let lost = 0;
+      for (const u of state.units) {
+        if (u.side !== side || reach.has(u.systemId) || u.strength <= 0) continue;
+        u.strength = Math.max(0, u.strength - attrition);
+        if (isLegion(types, u)) u.strength = Math.max(u.strength, LEGION_MIN);
+        if (u.strength < 0.1) {
+          u.strength = 0;
+          lost++;
+        }
+        changedUnits.add(u.id);
+        hit++;
+      }
+
+      if (hit > 0) {
+        notes[side].push(`Ohne Nachschub: ${hit} Einheit(en) verlieren je ${Math.round(attrition * 100)} % Stärke${lost > 0 ? `, ${lost} aufgerieben` : ""}.`);
+      }
+    }
+    for (let i = state.units.length - 1; i >= 0; i--) {
+      if (state.units[i].strength <= 0) {
+        await deleteUnit(state.units[i].id);
+        state.units.splice(i, 1);
+      }
+    }
+  }
+
   // 6. Einkommen
   for (const side of SIDES) {
     const inc = incomeOf(state, side);
@@ -498,6 +545,34 @@ export async function resolveTurn(state: CampaignState, orders: Order[], types: 
       notes[enemy].push(`SIEG: ${reason}. Der Feldzug ist beendet.`);
       notes[side].push(`NIEDERLAGE: ${reason}. Der Feldzug ist beendet.`);
     }
+  }
+
+  // Kein System mehr: verloren
+  for (const side of SIDES) {
+    const enemy: Side = side === "republik" ? "kus" : "republik";
+    const owned = [...state.systems.values()].some((x) => x.owner === side);
+    if (!owned && c.status === "running") {
+      c.status = "ended";
+      const reason = `${SIDE_NAME[side]} hält kein System mehr`;
+      await saveResult(c.id, enemy, reason, turn);
+      notes[enemy].push(`SIEG: ${reason}. Der Feldzug ist beendet.`);
+      notes[side].push(`NIEDERLAGE: ${reason}. Der Feldzug ist beendet.`);
+    }
+  }
+
+  // Zuglimit: der hoehere Gesamt-Systemwert gewinnt (Gleichstand: mehr Punkte)
+  const maxTurns = c.settings.maxTurns ?? 0;
+  if (maxTurns > 0 && turn >= maxTurns && c.status === "running") {
+    const score = (side: Side) => [...state.systems.values()].filter((x) => x.owner === side).reduce((a, x) => a + x.tier, 0);
+    const r = score("republik");
+    const k = score("kus");
+    const winner: Side = r !== k ? (r > k ? "republik" : "kus") : c.points.republik >= c.points.kus ? "republik" : "kus";
+    const loser: Side = winner === "republik" ? "kus" : "republik";
+    c.status = "ended";
+    const reason = `Zuglimit erreicht - Systemwert Republik ${r}, KUS ${k}`;
+    await saveResult(c.id, winner, reason, turn);
+    notes[winner].push(`SIEG: ${reason}. Der Feldzug ist beendet.`);
+    notes[loser].push(`NIEDERLAGE: ${reason}. Der Feldzug ist beendet.`);
   }
 
   // Speichern

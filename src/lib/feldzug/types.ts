@@ -12,13 +12,16 @@ export const SIDE_NAME: Record<Side, string> = { republik: "Galaktische Republik
 
 export type CampaignStatus = "setup" | "running" | "ended";
 
-export type UnitCategory = "infantry" | "heavy" | "armor" | "artillery" | "ship";
+// "legion": Spielerlegion (echte Spieler), "general": Modifikator, kaempft nicht selbst
+export type UnitCategory = "infantry" | "heavy" | "armor" | "artillery" | "ship" | "legion" | "general";
 export const CATEGORY_NAME: Record<UnitCategory, string> = {
   infantry: "Infanterie",
   heavy: "Schwere Infanterie",
   armor: "Panzer",
   artillery: "Artillerie",
   ship: "Schiff",
+  legion: "Spielerlegion",
+  general: "General",
 };
 
 export interface UnitType {
@@ -66,6 +69,12 @@ export interface Settings {
   /** Einkommen zusätzlich: Hauptquartier, je Besonderheit (Werft, Fabrik ...) */
   hqBonus: number;
   traitBonus: number;
+  /** Neutrale Systeme: Miliz-Kompanien je Systemwert (0 = kampflos einnehmbar) */
+  militiaPerTier: number;
+  /** Ohne Nachschub: Staerkeverlust je Zug (0,05 = 5 %) */
+  attritionPerTurn: number;
+  /** Zuglimit: danach gewinnt der hoehere Gesamt-Systemwert (0 = aus) */
+  maxTurns: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -83,6 +92,9 @@ export const DEFAULT_SETTINGS: Settings = {
   fortMax: 3,
   hqBonus: 300,
   traitBonus: 60,
+  militiaPerTier: 1,
+  attritionPerTurn: 0.05,
+  maxTurns: 0,
 };
 
 /** Startkatalog (im Panel änderbar). Werte je Kompanie bzw. Schiff. */
@@ -98,6 +110,11 @@ export const DEFAULT_UNIT_TYPES: UnitType[] = [
   { key: "rep_arquitens", side: "republik", category: "ship", name: "Arquitens-Kreuzer", men: 1, cost: 900, buildTurns: 2, attack: 22, defense: 16, speed: 700, capacity: 1, navalClass: "arquitens", buildAt: "shipyard", position: 12 },
   { key: "rep_pelta", side: "republik", category: "ship", name: "Pelta-Fregatte", men: 1, cost: 700, buildTurns: 2, attack: 12, defense: 18, speed: 650, capacity: 2, navalClass: "pelta", buildAt: "shipyard", position: 13 },
   // KUS - Boden
+  // Spielerlegion (wird beim Start am HQ aufgestellt, nicht kaufbar) und General
+  { key: "legion_republik", side: "republik", category: "legion", name: "Spielerlegion", men: 144, cost: 0, buildTurns: 0, attack: 18, defense: 16, speed: 0, capacity: 0, navalClass: "", buildAt: "none", position: 0 },
+  { key: "rep_jedi", side: "republik", category: "general", name: "Jedi-General", men: 1, cost: 1500, buildTurns: 2, attack: 0, defense: 0, speed: 0, capacity: 0, navalClass: "", buildAt: "hq", position: 5 },
+  // KUS - General
+  { key: "kus_general", side: "kus", category: "general", name: "Droiden-General", men: 1, cost: 1200, buildTurns: 2, attack: 0, defense: 0, speed: 0, capacity: 0, navalClass: "", buildAt: "hq", position: 6 },
   { key: "kus_b1", side: "kus", category: "infantry", name: "B1-Droidenkompanie", men: 144, cost: 220, buildTurns: 1, attack: 8, defense: 8, speed: 0, capacity: 0, navalClass: "", buildAt: "hq", position: 1 },
   { key: "kus_b2", side: "kus", category: "heavy", name: "B2-Superkampfdroiden", men: 100, cost: 520, buildTurns: 2, attack: 15, defense: 15, speed: 0, capacity: 0, navalClass: "", buildAt: "hq", position: 2 },
   { key: "kus_droideka", side: "kus", category: "heavy", name: "Droideka-Schwadron", men: 40, cost: 650, buildTurns: 2, attack: 18, defense: 20, speed: 0, capacity: 0, navalClass: "", buildAt: "hq", position: 3 },
@@ -118,6 +135,9 @@ export const KNOWN_TRAITS: Record<string, string[]> = {
   "skako minor": ["foundry"], felucia: ["foundry"], "colla iv": ["foundry"], raxus: ["capital"], serenno: ["capital"],
   "neimoidia": ["shipyard", "foundry"], "cato neimoidia": ["shipyard", "foundry"], ryloth: [], christophsis: [],
 };
+
+/** Neu dazugekommene Starttypen, die in bestehende Kataloge nachgetragen werden */
+export const ADDED_UNIT_TYPES = ["legion_republik", "rep_jedi", "kus_general"];
 
 export interface CampaignSystem {
   id: string;

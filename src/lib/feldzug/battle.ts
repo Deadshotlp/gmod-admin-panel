@@ -17,6 +17,12 @@
  * Verlust); gibt es keins, ist er verloren. Gewinnt der Angreifer einen
  * Bodenkampf, nimmt er das System ein. Verliert eine Seite die Raumschlacht
  * ohne ueberlebende Schiffe, gehen ihre Truppen an Bord mit unter.
+ *
+ * Extras (Paket 5):
+ *   General     kaempft nicht selbst; seine Seite bekommt im System +15 %
+ *               Angriff und +10 % Verteidigung. Zieht mit dem Verlierer ab.
+ *   Spielerlegion faellt nie unter 30 % und wird nie vernichtet.
+ *   Miliz       neutrale Systeme verteidigen sich (fightMilitia).
  */
 
 import { saveBattle } from "./db";
@@ -30,6 +36,8 @@ const K = 0.12;
 const MAX_ROUNDS = 6;
 const BREAK_AT = 0.5;
 const DESTROYED_BELOW = 0.1;
+// Spielerlegion: bleibende Verluste ja, Totalverlust nie
+export const LEGION_MIN = 0.3;
 
 /** Deterministischer Zufall (mulberry32) */
 function rng(seed: number) {
@@ -85,17 +93,24 @@ export function newContext(): BattleContext {
 }
 
 const isShip = (types: Map<string, UnitType>, u: Unit) => types.get(u.type)?.category === "ship";
+const isGeneral = (types: Map<string, UnitType>, u: Unit) => types.get(u.type)?.category === "general";
+export const isLegion = (types: Map<string, UnitType>, u: Unit) => types.get(u.type)?.category === "legion";
+
+/** Verluste anwenden mit Untergrenze fuer die Spielerlegion */
+function floorLegion(types: Map<string, UnitType>, u: Unit) {
+  if (isLegion(types, u)) u.strength = Math.max(u.strength, LEGION_MIN);
+}
 
 /** Teilnehmer eines Gefechts je Seite */
 function participants(state: CampaignState, b: Battle, types: Map<string, UnitType>): Record<Side, Unit[]> {
   const here = state.units.filter((u) => u.systemId === b.systemId && u.strength > 0);
   const pick = (s: Side) =>
-    here.filter((u) => u.side === s && (b.kind === "space" ? isShip(types, u) : !isShip(types, u) && u.status !== "orbit"));
+    here.filter((u) => u.side === s && !isGeneral(types, u) && (b.kind === "space" ? isShip(types, u) : !isShip(types, u) && u.status !== "orbit"));
   return { republik: pick("republik"), kus: pick("kus") };
 }
 
 /** Modifikatoren: Verteidiger, Befestigung (Boden), Nachschub */
-function modifiers(state: CampaignState, b: Battle, defender: Side, supplied: Record<Side, Set<string>>): BattleMods {
+function modifiers(state: CampaignState, b: Battle, defender: Side, supplied: Record<Side, Set<string>>, types: Map<string, UnitType>): BattleMods {
   const sys = state.systems.get(b.systemId);
   const mods: BattleMods = { attack: { republik: 1, kus: 1 }, defense: { republik: 1, kus: 1 }, notes: [] };
 
@@ -115,6 +130,16 @@ function modifiers(state: CampaignState, b: Battle, defender: Side, supplied: Re
     if (!ok) {
       mods.attack[s] *= 0.85;
       mods.notes.push(`${SIDE_NAME[s]} ohne Nachschub -15 % Angriff`);
+    }
+  }
+
+  // General im System
+  for (const s of SIDES) {
+    const g = state.units.find((u) => u.side === s && u.systemId === b.systemId && u.strength > 0 && isGeneral(types, u));
+    if (g) {
+      mods.attack[s] *= 1.15;
+      mods.defense[s] *= 1.1;
+      mods.notes.push(`${types.get(g.type)?.name ?? "General"} (${SIDE_NAME[s]}): +15 % Angriff, +10 % Verteidigung`);
     }
   }
 
@@ -252,12 +277,14 @@ export async function decideBattle(
       for (const u of units[s]) u.strength = u.strength * keep;
     }
   } else {
-    const mods = modifiers(state, b, defender, supplied);
+    const mods = modifiers(state, b, defender, supplied, types);
     modNotes = mods.notes;
     const sim = simulate({ republik: fighters(units.republik, types), kus: fighters(units.kus, types) }, mods, defender, b.seed || 1);
     winner = sim.winner;
     rounds = sim.rounds;
   }
+
+  for (const s of SIDES) for (const u of units[s]) floorLegion(types, u);
 
   const loser = otherSide(winner);
   const losses: Record<Side, number> = { republik: 0, kus: 0 };
@@ -275,12 +302,16 @@ export async function decideBattle(
   const lostAboard: Partial<Record<Side, number>> = {};
   const target = retreatTarget(state, loser, b.systemId);
   const retreating = units[loser].filter((u) => u.strength >= DESTROYED_BELOW);
+  // Generaele des Verlierers gehen mit
+  for (const u of state.units) {
+    if (u.side === loser && u.systemId === b.systemId && u.strength > 0 && isGeneral(types, u)) retreating.push(u);
+  }
 
   if (b.kind === "space") {
     // Truppen an Bord (im Orbit) ziehen mit den Schiffen ab - ohne Schiffe gehen sie unter
     const aboard = state.units.filter((u) => u.side === loser && u.systemId === b.systemId && u.status === "orbit" && u.strength > 0);
     if (retreating.length === 0 || !target) {
-      for (const u of aboard) u.strength = 0;
+      for (const u of aboard) u.strength = isLegion(types, u) ? Math.max(u.strength, LEGION_MIN) : 0;
       if (aboard.length > 0) lostAboard[loser] = aboard.length;
     } else {
       retreating.push(...aboard);
@@ -296,7 +327,7 @@ export async function decideBattle(
       }
       retreatedTo[loser] = target;
     } else {
-      for (const u of retreating) u.strength = 0;
+      for (const u of retreating) u.strength = isLegion(types, u) ? Math.max(u.strength, LEGION_MIN) : 0;
       retreatedTo[loser] = null;
     }
   }
@@ -348,6 +379,83 @@ export async function decideBattle(
     winner, attacker, defender, mode: b.mode, rounds, before, losses, mods: modNotes, destroyed,
     retreatedTo, lostAboard, captured, text,
   });
+}
+
+/**
+ * Neutrales System: die Miliz verteidigt sich gegen gelandete Truppen
+ * (sofort, ohne Spieler-Modus). Miliz = Systemwert x militiaPerTier
+ * Kompanien (Angriff 6, Verteidigung 8). Gewinnt der Angreifer: true (das
+ * System wird eingenommen); sonst Rueckzug ins naechste eigene System.
+ */
+export function fightMilitia(
+  state: CampaignState,
+  systemId: string,
+  side: Side,
+  types: Map<string, UnitType>,
+  ctx: BattleContext,
+): boolean {
+  const sys = state.systems.get(systemId);
+  const count = sys ? Math.round(sys.tier * (state.campaign.settings.militiaPerTier ?? 0)) : 0;
+  if (!sys || count <= 0) return true;
+
+  const enemy = otherSide(side);
+  const attackers = state.units.filter((u) => u.side === side && u.systemId === systemId && u.strength > 0
+    && !isShip(types, u) && !isGeneral(types, u) && u.status !== "orbit");
+  if (attackers.length === 0) return false;
+
+  const militia: Fighter[] = Array.from({ length: count }, (_, i) => ({
+    unit: { id: -1 - i, side: enemy, type: "miliz", systemId, strength: 1, xp: 0, status: "ready", readyTurn: 0, fleetId: null, navalShipId: null },
+    attack: 6,
+    defense: 8,
+    start: 1,
+  }));
+
+  const mods: BattleMods = { attack: { republik: 1, kus: 1 }, defense: { republik: 1, kus: 1 }, notes: [] };
+  mods.defense[enemy] *= 1.15;
+  if (state.units.some((u) => u.side === side && u.systemId === systemId && u.strength > 0 && isGeneral(types, u))) {
+    mods.attack[side] *= 1.15;
+    mods.defense[side] *= 1.1;
+  }
+
+  const before = new Map(attackers.map((u) => [u.id, u.strength]));
+  const sides = { [side]: fighters(attackers, types), [enemy]: militia } as Record<Side, Fighter[]>;
+  const seed = (state.campaign.id * 7919 + state.campaign.turn * 104729 + systemId.length * 31) >>> 0;
+  const sim = simulate(sides, mods, enemy, seed);
+  for (const u of attackers) floorLegion(types, u);
+
+  const startSum = [...before.values()].reduce((a, v) => a + v, 0);
+  const nowSum = attackers.reduce((a, u) => a + u.strength, 0);
+  const loss = startSum > 0 ? Math.round((1 - nowSum / startSum) * 100) : 0;
+  const won = sim.winner === side;
+
+  if (!won) {
+    const target = retreatTarget(state, side, systemId);
+    for (const u of state.units) {
+      if (u.side !== side || u.systemId !== systemId || u.strength <= 0 || isShip(types, u)) continue;
+      if (target) {
+        u.systemId = target;
+        u.strength *= 0.9;
+        u.status = "ready";
+        ctx.changedUnits.add(u.id);
+      } else if (!isLegion(types, u)) {
+        u.strength = 0;
+      }
+    }
+  }
+
+  for (const u of attackers) {
+    if (u.strength < DESTROYED_BELOW && !isLegion(types, u)) ctx.removedUnits.add(u.id);
+    else ctx.changedUnits.add(u.id);
+  }
+  for (let i = state.units.length - 1; i >= 0; i--) {
+    if (ctx.removedUnits.has(state.units[i].id)) state.units.splice(i, 1);
+  }
+
+  ctx.notes[side].push(won
+    ? `${sys.name}: Miliz (${count} Kompanie(n)) besiegt, eigene Verluste ${loss} %.`
+    : `${sys.name}: Angriff an der Miliz (${count} Kompanie(n)) gescheitert, Verluste ${loss} %, Rückzug.`);
+
+  return won;
 }
 
 /** Testhilfe: nur die Rundenrechnung (ohne Datenbank) */

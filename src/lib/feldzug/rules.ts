@@ -74,6 +74,8 @@ export function checkRelease(state: CampaignState, side: Side, systemId: string)
 /** Wo eine Einheit gebaut bzw. im Aufbau aufgestellt werden darf */
 export function canBuildAt(state: CampaignState, side: Side, type: UnitType, sys: CampaignSystem): boolean {
   if (sys.owner !== side) return false;
+  // "none": nicht kaufbar (Spielerlegion wird beim Start aufgestellt)
+  if (type.buildAt === "none") return false;
   const isHq = state.campaign.hq[side] === sys.id;
   if (type.buildAt === "any") return true;
   if (type.buildAt === "shipyard") return isHq || sys.traits.includes("shipyard");
@@ -86,7 +88,7 @@ export function checkBuy(state: CampaignState, side: Side, type: UnitType | unde
   if (!type || type.side !== side) throw new RuleError("Unbekannter Einheitentyp");
   const sys = requireSystem(state, systemId);
   if (!canBuildAt(state, side, type, sys)) {
-    throw new RuleError(type.category === "ship" ? "Schiffe nur am Hauptquartier oder an Werften" : "Nur am Hauptquartier oder an Fabrikwelten");
+    throw new RuleError(type.buildAt === "none" ? "Nicht kaufbar" : type.category === "ship" ? "Schiffe nur am Hauptquartier oder an Werften" : "Nur am Hauptquartier oder an Fabrikwelten");
   }
   const cost = type.cost * count;
   if (state.campaign.points[side] < cost) throw new RuleError(`Zu wenig Punkte (${cost} benötigt)`);

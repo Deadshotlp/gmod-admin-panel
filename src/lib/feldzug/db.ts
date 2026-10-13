@@ -114,6 +114,14 @@ const TABLES = [
     PRIMARY KEY (\`id\`),
     KEY \`campaign\` (\`campaign_id\`, \`side\`)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS \`pd_fz_results\` (
+    \`campaign_id\` INT UNSIGNED NOT NULL,
+    \`winner\` VARCHAR(16) NOT NULL,
+    \`reason\` VARCHAR(255) NOT NULL DEFAULT '',
+    \`turn\` INT NOT NULL DEFAULT 0,
+    \`created_at\` BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (\`campaign_id\`)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS \`pd_fz_intel\` (
     \`campaign_id\` INT UNSIGNED NOT NULL,
     \`side\` VARCHAR(16) NOT NULL,
@@ -354,7 +362,7 @@ export async function loadReports(id: number, side: Side | null, limit = 60) {
 }
 
 export async function deleteCampaign(id: number): Promise<void> {
-  for (const t of ["pd_fz_intel", "pd_fz_systems", "pd_fz_units", "pd_fz_commanders", "pd_fz_orders", "pd_fz_battles", "pd_fz_reports"]) {
+  for (const t of ["pd_fz_results", "pd_fz_intel", "pd_fz_systems", "pd_fz_units", "pd_fz_commanders", "pd_fz_orders", "pd_fz_battles", "pd_fz_reports"]) {
     await execute(`DELETE FROM \`${t}\` WHERE \`campaign_id\` = ?`, [id]);
   }
   await execute("DELETE FROM `pd_fz_campaigns` WHERE `id` = ?", [id]);
@@ -467,4 +475,23 @@ export async function saveIntel(id: number, side: Side, rows: Array<{ systemId: 
       chunk.flatMap((r) => [id, side, r.systemId, r.owner ?? "", r.turn]),
     );
   }
+}
+
+/* -------------------------------------------------------------------- */
+/* Ausgang des Feldzugs                                                  */
+/* -------------------------------------------------------------------- */
+
+export async function saveResult(id: number, winner: Side, reason: string, turn: number): Promise<void> {
+  await execute(
+    "REPLACE INTO `pd_fz_results` (`campaign_id`, `winner`, `reason`, `turn`, `created_at`) VALUES (?, ?, ?, ?, ?)",
+    [id, winner, reason, turn, now()],
+  );
+}
+
+export async function loadResult(id: number): Promise<{ winner: Side; reason: string; turn: number } | null> {
+  const row = await queryOne<{ winner: string; reason: string; turn: number }>(
+    "SELECT `winner`, `reason`, `turn` FROM `pd_fz_results` WHERE `campaign_id` = ?",
+    [id],
+  );
+  return row ? { winner: row.winner as Side, reason: row.reason, turn: Number(row.turn) } : null;
 }

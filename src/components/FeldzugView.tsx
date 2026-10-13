@@ -121,7 +121,8 @@ interface CampaignView {
   reports: Array<{ turn: number; side: string; kind: string; text: string; created_at: number }>;
   unitTypes: UnitType[];
   orders: Order[];
-  battles: Array<{ id: number; turn: number; systemId: string; kind: string; attacker: Side; mode: string; status: string }>;
+  battles: Battle[];
+  outcome: { winner: Side; reason: string; turn: number } | null;
   supply: Partial<Record<Side, { total: number; supplied: number; cut: number; ids: string[] }>>;
 }
 
@@ -131,6 +132,25 @@ interface Order {
   kind: string;
   data: { systemId?: string; to?: string; unitIds?: number[]; label?: string; cost?: number; distance?: number; path?: string[] };
   result: string;
+}
+
+interface Battle {
+  id: number;
+  turn: number;
+  systemId: string;
+  kind: string;
+  attacker: Side;
+  mode: string;
+  status: string;
+  scheduledAt: number;
+  result: {
+    text?: string;
+    winner?: Side;
+    losses?: Record<Side, number>;
+    rounds?: Array<Record<Side, number>>;
+    mods?: string[];
+    cancelled?: string;
+  };
 }
 
 type Tab = "karte" | "gebiet" | "kommandeure" | "einstellungen" | "katalog";
@@ -370,6 +390,21 @@ export default function FeldzugView() {
             />
           )}
           {!galaxy && <div className="panel">Galaxie wird geladen…</div>}
+
+          {data.outcome && (
+            <div className="panel" style={{ marginTop: 16, borderLeft: `4px solid ${SIDE_COLOR[data.outcome.winner]}` }}>
+              <h3 style={{ marginTop: 0, color: SIDE_COLOR[data.outcome.winner] }}>
+                Feldzug beendet - Sieg für {SIDE_NAME[data.outcome.winner]}
+              </h3>
+              <div>{data.outcome.reason} (Zug {data.outcome.turn}).</div>
+            </div>
+          )}
+
+          {(tab === "karte" || !lead) && data.campaign.status === "ended" && (
+            <div className="panel" style={{ marginTop: 16 }}>
+              <BattleLog data={data} />
+            </div>
+          )}
 
           {(tab === "karte" || !lead) && running && (
             <TurnPanel data={data} side={actSide} lead={lead} busy={busy} op={op} onSelect={setSelected}
@@ -1242,6 +1277,128 @@ function SystemPanel({
 
 const KIND_NAME: Record<string, string> = { move: "Verlegen", build: "Bauen", fortify: "Befestigen", scout: "Aufklären", occupy: "Besetzen", land: "Landen" };
 
+const kindName = (k: string) => (k === "space" ? "Raumschlacht" : "Bodenkampf");
+
+/** Ein offenes Gefecht; die Spielleitung stellt Modus/Termin ein oder entscheidet es */
+function BattleItem({
+  battle: b,
+  name,
+  lead,
+  busy,
+  op,
+  onSelect,
+  turn,
+}: {
+  battle: Battle;
+  name: string;
+  lead: boolean;
+  busy: boolean;
+  op: (o: string, extra?: Record<string, unknown>) => Promise<unknown>;
+  onSelect: (id: string) => void;
+  turn: number;
+}) {
+  const [winner, setWinner] = useState<Side>(b.attacker);
+  const [loss, setLoss] = useState<Record<Side, number>>({ republik: 20, kus: 20 });
+  const [date, setDate] = useState(b.scheduledAt ? new Date(b.scheduledAt * 1000).toISOString().slice(0, 16) : "");
+  const player = b.mode === "spieler";
+  const when = b.scheduledAt ? new Date(b.scheduledAt * 1000).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }) : null;
+
+  return (
+    <div style={{ fontSize: 14, padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
+      <div style={{ cursor: "pointer" }} onClick={() => onSelect(b.systemId)}>
+        <span style={{ color: "#ff5a46" }}>⚔</span> <b>{name}</b> - {kindName(b.kind)}, {SIDE_NAME[b.attacker]} greift an
+      </div>
+      <div className="subtitle" style={{ margin: "2px 0" }}>
+        {player
+          ? `Spieler tragen es aus${when ? ` - angesetzt ${when}` : " - Termin offen"}`
+          : `wird beim Ende von Zug ${Math.max(turn, b.turn + 1)} simuliert`}
+      </div>
+
+      {lead && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
+          <div className="button-row" style={{ flexWrap: "wrap", alignItems: "center" }}>
+            <select value={b.mode} disabled={busy} onChange={(e) => void op("battleUpdate", { battleId: b.id, mode: e.target.value })} style={{ ...inputStyle, width: 160 }}>
+              <option value="ki">Simulation</option>
+              <option value="spieler">Spieler</option>
+            </select>
+            {!player && (
+              <button disabled={busy} onClick={() => void op("battleDecide", { battleId: b.id })}>
+                Jetzt simulieren
+              </button>
+            )}
+          </div>
+          {player && (
+            <>
+              <div className="button-row" style={{ alignItems: "center" }}>
+                <input type="datetime-local" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...inputStyle, width: 210 }} />
+                <button
+                  disabled={busy || !date}
+                  onClick={() => void op("battleUpdate", { battleId: b.id, scheduledAt: Math.floor(new Date(date).getTime() / 1000) })}
+                >
+                  Termin setzen
+                </button>
+              </div>
+              <div className="button-row" style={{ flexWrap: "wrap", alignItems: "center" }}>
+                <span>Sieger</span>
+                <select value={winner} onChange={(e) => setWinner(e.target.value as Side)} style={{ ...inputStyle, width: 130 }}>
+                  {SIDES.map((s) => (
+                    <option key={s} value={s}>{SIDE_NAME[s]}</option>
+                  ))}
+                </select>
+                {SIDES.map((s) => (
+                  <label key={s} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    Verluste {SIDE_NAME[s]}
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={loss[s]}
+                      onChange={(e) => setLoss({ ...loss, [s]: Math.max(0, Math.min(100, Number(e.target.value) || 0)) })}
+                      style={{ ...inputStyle, width: 70 }}
+                    />
+                    %
+                  </label>
+                ))}
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() => void op("battleDecide", { battleId: b.id, winner, lossRepublik: loss.republik, lossKus: loss.kus })}
+                >
+                  Ergebnis eintragen
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Entschiedene Gefechte (die neuesten zuerst) */
+function BattleLog({ data }: { data: CampaignView }) {
+  const done = data.battles.filter((b) => b.status === "done" && !b.result?.cancelled).slice(0, 8);
+  if (done.length === 0) return null;
+
+  return (
+    <>
+      <h4>Gefechtsberichte</h4>
+      {done.map((b) => (
+        <div key={b.id} style={{ fontSize: 13, padding: "4px 0", borderBottom: "1px solid var(--border)" }}>
+          <span style={{ color: b.result?.winner ? SIDE_COLOR[b.result.winner] : undefined }}>■</span>{" "}
+          <span style={{ color: "var(--text-muted)" }}>Zug {b.turn}:</span> {b.result?.text ?? "-"}
+          {b.result?.rounds && b.result.rounds.length > 0 && (
+            <div className="subtitle" style={{ margin: "2px 0 0" }}>
+              Verlauf (Reststärke Republik/KUS): {b.result.rounds.map((r) => `${r.republik}/${r.kus}`).join(" → ")}
+              {b.result.mods && b.result.mods.length > 0 ? ` · ${b.result.mods.join(", ")}` : ""}
+            </div>
+          )}
+        </div>
+      ))}
+    </>
+  );
+}
+
 /** Zug: geplante Befehle, Bereitschaft, Gefechte; Spielleitung beendet den Zug */
 function TurnPanel({
   data,
@@ -1309,11 +1466,9 @@ function TurnPanel({
         <h3 style={{ marginTop: 0 }}>Gefechte</h3>
         {open.length === 0 && <div className="subtitle">Keine offenen Gefechte.</div>}
         {open.map((b) => (
-          <div key={b.id} style={{ fontSize: 14, padding: "3px 0", cursor: "pointer" }} onClick={() => onSelect(b.systemId)}>
-            <span style={{ color: "#ff5a46" }}>⚔</span> {name(b.systemId)} - {b.kind === "space" ? "Raumschlacht" : "Bodenkampf"}, {SIDE_NAME[b.attacker]} greift an
-            <span style={{ color: "var(--text-muted)" }}> (seit Zug {b.turn}, {b.mode === "spieler" ? "Spieler" : "Simulation"})</span>
-          </div>
+          <BattleItem key={b.id} battle={b} name={name(b.systemId)} lead={lead} busy={busy} op={op} onSelect={onSelect} turn={data.campaign.turn} />
         ))}
+        <BattleLog data={data} />
         {lead && (
           <>
             <h4>Spielleitung</h4>

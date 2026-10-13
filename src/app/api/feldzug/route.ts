@@ -27,9 +27,11 @@ import {
   deleteOrder,
   loadBattles,
   loadIntel,
+  loadResult,
+  saveBattle,
 } from "@/lib/feldzug/db";
 import type { Order } from "@/lib/feldzug/db";
-import { incomeOf, orderCost, recordIntel, resolveTurn, suppliedSystems, validateOrder } from "@/lib/feldzug/turn";
+import { decideNow, incomeOf, orderCost, recordIntel, resolveTurn, suppliedSystems, validateOrder } from "@/lib/feldzug/turn";
 import { visibleSystems } from "@/lib/feldzug/rules";
 import type { CampaignState } from "@/lib/feldzug/db";
 import { buildHopGraph } from "@/lib/feldzug/routing";
@@ -186,8 +188,10 @@ export async function GET(request: Request) {
     const visibleIds = new Set(view.systems.filter((x) => x.owner !== "?").map((x) => x.id));
     const battles = (await loadBattles(state.campaign.id)).filter((b) => !sideFilter || visibleIds.has(b.systemId)).slice(0, 40);
     const shownSides = sideFilter ? [sideFilter] : SIDES;
+    const outcome = await loadResult(state.campaign.id);
     return NextResponse.json({
       ...view,
+      outcome,
       orders,
       battles: battles.map((b) => ({ ...b, seed: undefined })),
       supply: Object.fromEntries(shownSides.map((side) => [side, { ...incomeOf(state, side), ids: [...suppliedSystems(state, side)] }])),
@@ -273,6 +277,22 @@ const schema = z.discriminatedUnion("op", [
   }),
   z.object({ op: z.literal("orderRemove"), id: z.number().int(), side: sideSchema.optional(), slot: z.number().int() }),
   z.object({ op: z.literal("endTurn"), id: z.number().int(), turn: z.number().int() }),
+  z.object({
+    op: z.literal("battleUpdate"),
+    id: z.number().int(),
+    battleId: z.number().int(),
+    mode: z.enum(["ki", "spieler"]).optional(),
+    scheduledAt: z.number().int().min(0).optional(),
+  }),
+  z.object({
+    op: z.literal("battleDecide"),
+    id: z.number().int(),
+    battleId: z.number().int(),
+    // ohne winner: simulieren; mit winner: Spielerergebnis eintragen
+    winner: sideSchema.optional(),
+    lossRepublik: z.number().min(0).max(100).optional(),
+    lossKus: z.number().min(0).max(100).optional(),
+  }),
 ]);
 
 type Input = z.infer<typeof schema>;
@@ -628,6 +648,30 @@ async function runCampaignOp(user: PanelUser, input: Input, requireAdmin: () => 
       await resolveTurn(state, orders, typeMap);
       await audit("endTurn", { turn, orders: orders.length });
       return `Zug ${turn} ausgewertet - jetzt Zug ${c.turn}`;
+    }
+
+    case "battleUpdate": {
+      requireAdmin();
+      const b = (await loadBattles(c.id)).find((x) => x.id === input.battleId);
+      if (!b) throw new RuleError("Gefecht nicht gefunden");
+      if (b.status === "done") throw new RuleError("Gefecht ist schon entschieden");
+      if (input.mode) b.mode = input.mode;
+      if (input.scheduledAt !== undefined) b.scheduledAt = input.scheduledAt;
+      b.status = b.mode === "spieler" && b.scheduledAt > 0 ? "scheduled" : "open";
+      await saveBattle(b);
+      await audit("battle", { battleId: b.id, mode: b.mode, scheduledAt: b.scheduledAt });
+      return b.mode === "spieler" ? "Gefecht wird von Spielern ausgetragen" : "Gefecht wird simuliert";
+    }
+
+    case "battleDecide": {
+      requireAdmin();
+      if (c.status !== "running") throw new RuleError("Der Feldzug läuft nicht");
+      const manual = input.winner
+        ? { winner: input.winner, losses: { republik: input.lossRepublik ?? 0, kus: input.lossKus ?? 0 } }
+        : undefined;
+      const text = await decideNow(state, input.battleId, typeMap, manual);
+      await audit("battleDecide", { battleId: input.battleId, manual });
+      return text;
     }
 
     default:

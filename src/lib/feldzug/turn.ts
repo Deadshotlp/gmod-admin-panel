@@ -19,6 +19,7 @@
  * gelandete Truppen hat.
  *
  * Auswertung beim Zugende durch die Spielleitung, beide Seiten gleichzeitig:
+ *   0. offene Gefechte aus dem Vorzug entscheiden (battle.ts; Modus "ki")
  *   1. Bau, Befestigung, Besetzen   2. Bewegung   3. Lage: Eroberung oder
  *   Gefecht (Paket 3 entscheidet es)   4. Aufklärung   5. Ausbildung fertig
  *   6. Einkommen aus versorgten Systemen   7. Berichte, nächster Zug
@@ -33,10 +34,12 @@ import {
   saveOrder,
   saveSystem,
   saveIntel,
+  saveResult,
   saveUnit,
   updateCampaign,
 } from "./db";
 import type { CampaignState, Order, OrderKind } from "./db";
+import { decideBattle, newContext } from "./battle";
 import { hopCost, pathCost } from "./routing";
 import { RuleError, canBuildAt, connectedToSide, occupyCost, otherSide, visibleSystems } from "./rules";
 import { SIDES, SIDE_NAME } from "./types";
@@ -265,6 +268,21 @@ export async function resolveTurn(state: CampaignState, orders: Order[], types: 
     state.units.push({ ...u, id });
   };
 
+  // 0. Offene Gefechte aus den Vorzuegen entscheiden (Modus "ki"); Gefechte im
+  // Spieler-Modus warten auf das eingetragene Ergebnis
+  {
+    const supplied = { republik: suppliedSystems(state, "republik"), kus: suppliedSystems(state, "kus") };
+    const ctx = newContext();
+    for (const b of await loadBattles(c.id)) {
+      if (b.status === "done" || b.mode !== "ki" || b.turn >= turn) continue;
+      await decideBattle(state, b, types, supplied, ctx);
+    }
+    for (const side of SIDES) notes[side].push(...ctx.notes[side]);
+    for (const id of ctx.changedUnits) changedUnits.add(id);
+    for (const id of ctx.changedSystems) changedSystems.add(id);
+    for (const id of ctx.removedUnits) await deleteUnit(id);
+  }
+
   // 1a. Besetzen - beide Seiten auf dasselbe System: keiner bekommt es
   const occupyOrders = orders.filter((o) => o.kind === "occupy");
   for (const o of occupyOrders) {
@@ -469,6 +487,19 @@ export async function resolveTurn(state: CampaignState, orders: Order[], types: 
     await recordIntel(state, side, ids, next);
   }
 
+  // Siegbedingung: das gegnerische Hauptquartier ist eingenommen
+  for (const side of SIDES) {
+    const hq = state.systems.get(c.hq[side]);
+    const enemy = side === "republik" ? "kus" : "republik";
+    if (hq && hq.owner === enemy && c.status === "running") {
+      c.status = "ended";
+      const reason = `Hauptquartier ${hq.name} von ${SIDE_NAME[enemy]} eingenommen`;
+      await saveResult(c.id, enemy, reason, turn);
+      notes[enemy].push(`SIEG: ${reason}. Der Feldzug ist beendet.`);
+      notes[side].push(`NIEDERLAGE: ${reason}. Der Feldzug ist beendet.`);
+    }
+  }
+
   // Speichern
   for (const id of changedSystems) await saveSystem(c.id, state.systems.get(id)!);
   for (const id of changedUnits) {
@@ -493,4 +524,59 @@ export async function recordIntel(state: CampaignState, side: Side, ids: Set<str
     .filter((s): s is CampaignSystem => !!s)
     .map((s) => ({ systemId: s.id, owner: s.owner, turn }));
   await saveIntel(state.campaign.id, side, rows);
+}
+
+/**
+ * Ein offenes Gefecht sofort entscheiden (Spielleitung): simulieren oder mit
+ * eingetragenem Ergebnis (Spieler-Modus). Speichert Einheiten, Systeme,
+ * Berichte und - wenn ein Hauptquartier faellt - den Ausgang des Feldzugs.
+ */
+export async function decideNow(
+  state: CampaignState,
+  battleId: number,
+  types: Map<string, UnitType>,
+  manual?: { winner: Side; losses: Record<Side, number> },
+): Promise<string> {
+  const c = state.campaign;
+  const b = (await loadBattles(c.id)).find((x) => x.id === battleId);
+  if (!b) throw new RuleError("Gefecht nicht gefunden");
+  if (b.status === "done") throw new RuleError("Gefecht ist schon entschieden");
+
+  if (manual) b.mode = "spieler";
+  const supplied = { republik: suppliedSystems(state, "republik"), kus: suppliedSystems(state, "kus") };
+  const ctx = newContext();
+  const res = await decideBattle(state, b, types, supplied, ctx, manual);
+
+  for (const id of ctx.removedUnits) await deleteUnit(id);
+  for (const id of ctx.changedUnits) {
+    const u = state.units.find((x) => x.id === id);
+    if (u) await saveUnit(u);
+  }
+
+  // Umkaempft-Markierung: nur noch, wenn ein weiteres Gefecht dort offen ist
+  const sys = state.systems.get(b.systemId);
+  if (sys) {
+    sys.contested = (await loadBattles(c.id)).some((x) => x.status !== "done" && x.systemId === sys.id);
+    ctx.changedSystems.add(sys.id);
+  }
+  for (const id of ctx.changedSystems) await saveSystem(c.id, state.systems.get(id)!);
+
+  for (const side of SIDES) {
+    for (const text of ctx.notes[side]) await addReport(c.id, c.turn, side, "battle", text);
+  }
+
+  for (const side of SIDES) {
+    const hq = state.systems.get(c.hq[side]);
+    const enemy: Side = side === "republik" ? "kus" : "republik";
+    if (hq && hq.owner === enemy && c.status === "running") {
+      c.status = "ended";
+      const reason = `Hauptquartier ${hq.name} von ${SIDE_NAME[enemy]} eingenommen`;
+      await saveResult(c.id, enemy, reason, c.turn);
+      await updateCampaign(c);
+      await addReport(c.id, c.turn, enemy, "turn", `SIEG: ${reason}. Der Feldzug ist beendet.`);
+      await addReport(c.id, c.turn, side, "turn", `NIEDERLAGE: ${reason}. Der Feldzug ist beendet.`);
+    }
+  }
+
+  return res.text;
 }

@@ -25,6 +25,17 @@ interface ModelInfo {
 }
 
 const ANY = "*";
+
+// Trageplaetze: Items auf demselben Platz schliessen sich aus (Gamemode PD.Gear.SlotNames)
+const SLOT_OPTIONS: Array<[string, string]> = [
+  ["", "kein Platz"],
+  ["ruecken", "Rücken"],
+  ["kopf", "Kopf"],
+  ["brust", "Brust"],
+  ["guertel", "Gürtel"],
+  ["arme", "Arme"],
+  ["beine", "Beine"],
+];
 // Alle Felder einer Zeile gleich hoch und oben ausgerichtet (der Hinweis unter
 // der Bodygroup schiebt sonst nur diese Zelle nach oben)
 const small = { ...inputStyle, padding: "4px 6px", height: 34, boxSizing: "border-box" as const };
@@ -34,6 +45,7 @@ export default function AusruestungBodygroups({ user }: { user: PanelUser }) {
   const [bindings, setBindings] = useState<Binding[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [classes, setClasses] = useState<string[]>([]);
+  const [slots, setSlots] = useState<Record<string, string>>({});
   const [configured, setConfigured] = useState(true);
   const [hint, setHint] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -47,6 +59,7 @@ export default function AusruestungBodygroups({ user }: { user: PanelUser }) {
       bindings?: Binding[];
       models?: ModelInfo[];
       classes?: string[];
+      slots?: Array<{ class: string; slot: string }>;
     }>(await fetchWithTimeout("/api/waffen/bodygroups", { cache: "no-store" }));
 
     if (error || !data) {
@@ -59,7 +72,16 @@ export default function AusruestungBodygroups({ user }: { user: PanelUser }) {
     setBindings(data.bindings ?? []);
     setModels(data.models ?? []);
     setClasses(data.classes ?? []);
+    setSlots(Object.fromEntries((data.slots ?? []).map((s) => [s.class, s.slot])));
   }, []);
+
+  // Items mit Bodygroup-Bindung plus solche, die schon einen Platz haben
+  const slotItems = useMemo(() => {
+    const set = new Set<string>();
+    for (const b of bindings) if (b.class.trim()) set.add(b.class.trim());
+    for (const c of Object.keys(slots)) set.add(c);
+    return [...set].sort();
+  }, [bindings, slots]);
 
   useEffect(() => {
     void load();
@@ -95,7 +117,10 @@ export default function AusruestungBodygroups({ user }: { user: PanelUser }) {
         await fetchWithTimeout("/api/waffen/bodygroups", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ bindings: bindings.filter((b) => b.class.trim() && b.bodygroup.trim()) }),
+          body: JSON.stringify({
+            bindings: bindings.filter((b) => b.class.trim() && b.bodygroup.trim()),
+            slots: slotItems.filter((c) => slots[c]).map((c) => ({ class: c, slot: slots[c] })),
+          }),
         }),
       );
 
@@ -211,6 +236,44 @@ export default function AusruestungBodygroups({ user }: { user: PanelUser }) {
         </table>
       </div>
 
+      <h3 style={{ marginTop: 24 }}>Trageplätze</h3>
+      <p className="subtitle" style={{ marginTop: 0 }}>
+        Items auf demselben Platz schließen sich aus: Trägt ein Spieler z. B. das Jetpack auf dem <b>Rücken</b>, gibt die
+        Waffenkiste keinen Rucksack heraus, bis das Jetpack abgelegt ist.
+      </p>
+      <table style={{ fontSize: 14 }}>
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Platz</th>
+          </tr>
+        </thead>
+        <tbody>
+          {slotItems.map((c) => (
+            <tr key={c}>
+              <td style={{ ...cell, minWidth: 220 }}>{c}</td>
+              <td style={{ ...cell, minWidth: 160 }}>
+                <select value={slots[c] ?? ""} disabled={!canEdit} onChange={(e) => setSlots({ ...slots, [c]: e.target.value })} style={small}>
+                  {SLOT_OPTIONS.map(([v, label]) => (
+                    <option key={v} value={v}>
+                      {label}
+                    </option>
+                  ))}
+                  {slots[c] && !SLOT_OPTIONS.some(([v]) => v === slots[c]) && <option value={slots[c]}>{slots[c]}</option>}
+                </select>
+              </td>
+            </tr>
+          ))}
+          {slotItems.length === 0 && (
+            <tr>
+              <td colSpan={2} style={{ color: "var(--text-muted)" }}>
+                Noch keine Items - erst oben eine Bodygroup-Zeile anlegen.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+
       {canEdit && (
         <div className="button-row" style={{ marginTop: 12 }}>
           <button
@@ -219,7 +282,7 @@ export default function AusruestungBodygroups({ user }: { user: PanelUser }) {
             Zeile hinzufügen
           </button>
           <button className="primary" onClick={() => void save()} disabled={busy}>
-            Bodygroups speichern
+            Bodygroups und Plätze speichern
           </button>
         </div>
       )}

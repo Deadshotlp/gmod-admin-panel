@@ -44,6 +44,7 @@ const NAV: Array<{ group?: string; items: Array<{ href: string; label: string }>
   {
     group: "Verwaltung",
     items: [
+      { href: "/bugreports", label: "Bug Reports" },
       { href: "/logs", label: "Admin-Logs" },
       { href: "/audit", label: "Änderungsprotokoll" },
       { href: "/werkzeuge", label: "Werkzeuge & Sicherungen" },

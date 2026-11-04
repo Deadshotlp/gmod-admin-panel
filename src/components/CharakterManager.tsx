@@ -222,7 +222,7 @@ export default function CharakterManager({ user }: { user: PanelUser }) {
 
       <h2>Charakter-ID</h2>
       <div className="panel" style={{ marginBottom: 22 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <div className="stack-mobile" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
           <Field label="Präfix" hint="steht vor jeder ID in allen Anzeigen, z. B. CT-">
             <input
               value={settings.id_prefix}
@@ -265,7 +265,7 @@ export default function CharakterManager({ user }: { user: PanelUser }) {
 
       <h2>Charaktere & Slots</h2>
       <div className="panel" style={{ marginBottom: 22 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <div className="stack-mobile" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
           <Field label="Maximale Charaktere" hint="Obergrenze für alle Ränge">
             <input
               type="number"
@@ -367,7 +367,7 @@ export default function CharakterManager({ user }: { user: PanelUser }) {
 
       <h2>Namen</h2>
       <div className="panel" style={{ marginBottom: 22 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <div className="stack-mobile" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
           <Field label="Minimale Länge">
             <input
               type="number"
@@ -407,7 +407,7 @@ export default function CharakterManager({ user }: { user: PanelUser }) {
 
       <h2>Charaktermenü</h2>
       <div className="panel" style={{ marginBottom: 22 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <div className="stack-mobile" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
           <Field label="Hintergrundbild" hint="Materialpfad, z. B. mario/void_logo.png">
             <input
               className="mono"

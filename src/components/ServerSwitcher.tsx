@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { inputStyle } from "./ui";
+import Icon from "./Icon";
 
 /**
  * Umschalter zwischen mehreren Servern. Erscheint nur, wenn tatsächlich mehr als
@@ -19,37 +19,39 @@ export default function ServerSwitcher({
   if (servers.length < 2) return null;
 
   return (
-    <div style={{ padding: "0 20px 14px" }}>
-      <div className="card-label">Server</div>
+    <div className="sidebar-server">
+      <label className="server-select">
+        <Icon name="server" size={15} className="lead" />
+        <select
+          value={activeId}
+          disabled={busy}
+          aria-label="Server wechseln"
+          onChange={async (event) => {
+            setBusy(true);
 
-      <select
-        value={activeId}
-        disabled={busy}
-        style={{ ...inputStyle, padding: "6px 8px", fontSize: 13 }}
-        onChange={async (event) => {
-          setBusy(true);
+            try {
+              await fetch("/api/server/select", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: event.target.value }),
+              });
 
-          try {
-            await fetch("/api/server/select", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ id: event.target.value }),
-            });
-
-            // Vollständig neu laden: sämtliche Ansichten hängen am gewählten
-            // Server, ein Teilaustausch würde alte Daten stehen lassen.
-            window.location.reload();
-          } catch {
-            setBusy(false);
-          }
-        }}
-      >
-        {servers.map((server) => (
-          <option key={server.id} value={server.id}>
-            {server.label}
-          </option>
-        ))}
-      </select>
+              // Vollständig neu laden: sämtliche Ansichten hängen am gewählten
+              // Server, ein Teilaustausch würde alte Daten stehen lassen.
+              window.location.reload();
+            } catch {
+              setBusy(false);
+            }
+          }}
+        >
+          {servers.map((server) => (
+            <option key={server.id} value={server.id}>
+              {server.label}
+            </option>
+          ))}
+        </select>
+        <Icon name="chevrons" size={16} className="trail" />
+      </label>
     </div>
   );
 }

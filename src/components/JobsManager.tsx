@@ -539,7 +539,7 @@ export default function JobsManager({ user }: { user: PanelUser }) {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "380px 1fr", gap: 18 }}>
+      <div className="stack-mobile" style={{ display: "grid", gridTemplateColumns: "380px 1fr", gap: 18 }}>
         {/* Baum */}
         <div className="panel" style={{ alignSelf: "start" }}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
@@ -775,7 +775,7 @@ export default function JobsManager({ user }: { user: PanelUser }) {
 
               {selection.level === "job" && (
                 <>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                  <div className="stack-mobile" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
                     <div>
                       <label className="card-label">Gehalt</label>
                       <input

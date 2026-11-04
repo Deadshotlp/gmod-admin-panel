@@ -89,6 +89,7 @@ export default function LogsViewer() {
 
       <div className="panel" style={{ marginBottom: 18 }}>
         <form
+          className="stack-mobile"
           onSubmit={(event) => {
             event.preventDefault();
             void load(1);

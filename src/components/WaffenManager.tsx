@@ -131,7 +131,7 @@ export default function WaffenManager({ user }: { user: PanelUser }) {
 
       <h2>Grundwerte</h2>
       <div className="panel" style={{ marginBottom: 22 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
+        <div className="stack-mobile" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
           <Field label="Tragelast in Kg">
             <input
               type="number"

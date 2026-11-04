@@ -1,64 +1,12 @@
-import Link from "next/link";
 import type { PanelUser } from "@/lib/auth";
+import { getBrand } from "@/lib/brand";
 import { getActiveServer, getServers } from "@/lib/servers";
-import ServerSwitcher from "./ServerSwitcher";
+import AppFrame from "./AppFrame";
 
 /**
- * Rahmen mit Seitenleiste.
+ * Rahmen mit Seitenleiste. Liest serverseitig, was der Rahmen braucht, und
+ * übergibt es an AppFrame - dort sitzt alles, was im Browser schaltet.
  */
-
-/** Seitenleiste in Gruppen; Reihenfolge = Häufigkeit der Nutzung. */
-const NAV: Array<{ group?: string; items: Array<{ href: string; label: string }> }> = [
-  { items: [{ href: "/", label: "Übersicht" }] },
-  {
-    group: "Spieler",
-    items: [
-      { href: "/spieler", label: "Spieler & Charaktere" },
-      { href: "/jobs", label: "Jobs & Einheiten" },
-      { href: "/fortbildungen", label: "Fortbildungen" },
-      { href: "/charakter", label: "Charakter-Einstellungen" },
-    ],
-  },
-  {
-    group: "Raumflotte",
-    items: [
-      { href: "/strategie", label: "Strategieansicht" },
-      { href: "/feldzug", label: "Galaktischer Feldzug" },
-      { href: "/flotte", label: "Flottenkommando" },
-      { href: "/raumflotte", label: "Raumflotte: Konfiguration" },
-    ],
-  },
-  {
-    group: "Ausrüstung & Fahrzeuge",
-    items: [
-      { href: "/waffen", label: "Waffen & Gewichte" },
-      { href: "/arccw", label: "ArcCW-Schaden" },
-      { href: "/fahrzeuge", label: "Fahrzeuginventar" },
-      { href: "/kisten", label: "Transportkisten" },
-    ],
-  },
-  {
-    group: "Kommunikation",
-    items: [{ href: "/funk", label: "Funk" }],
-  },
-  {
-    group: "Verwaltung",
-    items: [
-      { href: "/bugreports", label: "Bug Reports" },
-      { href: "/logs", label: "Admin-Logs" },
-      { href: "/audit", label: "Änderungsprotokoll" },
-      { href: "/werkzeuge", label: "Werkzeuge & Sicherungen" },
-      { href: "/benutzer", label: "Panel-Benutzer" },
-    ],
-  },
-];
-
-const ROLE_LABEL: Record<string, string> = {
-  viewer: "Leser",
-  editor: "Bearbeiter",
-  admin: "Administrator",
-};
-
 export default async function Shell({
   user,
   current,
@@ -84,41 +32,18 @@ export default async function Shell({
     // Ohne Konfiguration bleibt es beim ersten Eintrag
   }
 
+  const brand = getBrand();
+
   return (
-    <div className="layout">
-      <nav className="sidebar">
-        <div className="sidebar-brand">
-          <strong>Serververwaltung</strong>
-          <span>Star Wars RP</span>
-        </div>
-
-        <ServerSwitcher servers={servers} activeId={activeId} />
-
-        {NAV.map((section, index) => (
-          <div key={section.group ?? index} className="nav-group">
-            {section.group && <div className="nav-group-title">{section.group}</div>}
-            {section.items.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`nav-item${current === item.href ? " active" : ""}`}
-              >
-                {item.label}
-              </Link>
-            ))}
-          </div>
-        ))}
-
-        <div className="sidebar-foot">
-          <div>{user.displayName}</div>
-          <div>{ROLE_LABEL[user.role] ?? user.role}</div>
-          <p style={{ marginTop: 8 }}>
-            <a href="/api/auth/logout">Abmelden</a>
-          </p>
-        </div>
-      </nav>
-
-      <main className={wide ? "main main-wide" : "main"}>{children}</main>
-    </div>
+    <AppFrame
+      brand={{ name: brand.name, community: brand.community, mark: brand.mark, logo: brand.logo }}
+      user={{ displayName: user.displayName, role: user.role }}
+      servers={servers}
+      activeId={activeId}
+      current={current}
+      wide={wide}
+    >
+      {children}
+    </AppFrame>
   );
 }

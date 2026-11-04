@@ -16,7 +16,7 @@ interface Entry {
   hasDetail: boolean;
 }
 
-const ACTION_LABEL: Record<string, string> = {
+export const ACTION_LABEL: Record<string, string> = {
   "jobs.saveUnit": "Einheit gespeichert",
   "jobs.saveSubunit": "Untereinheit gespeichert",
   "jobs.saveJob": "Job gespeichert",

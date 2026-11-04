@@ -206,7 +206,7 @@ export default function AusruestungBodygroups({ user }: { user: PanelUser }) {
                         <option key={n} value={n} />
                       ))}
                     </datalist>
-                    {b.bodygroup && count === undefined && <div style={{ fontSize: 11, color: "#f0a030" }}>bei diesem Model unbekannt</div>}
+                    {b.bodygroup && count === undefined && <div style={{ fontSize: 11, color: "var(--warn)" }}>bei diesem Model unbekannt</div>}
                     {count !== undefined && <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Werte 0–{count - 1}</div>}
                   </td>
                   {(["valueOff", "valueOn", "valueActive"] as const).map((k) => (

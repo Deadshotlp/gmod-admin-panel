@@ -116,7 +116,7 @@ export default function UsersManager({ me }: { me: PanelUser }) {
           hier nicht eingetragen ist.
         </p>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 12, alignItems: "end" }}>
+        <div className="stack-mobile" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 12, alignItems: "end" }}>
           <Field label="SteamID64">
             <input
               value={steamId}

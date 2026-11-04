@@ -1185,7 +1185,7 @@ function SystemPanel({
               {landingPlanned ? (
                 <div className="subtitle">Landeoperation ist geplant.</div>
               ) : enemyShips ? (
-                <div className="subtitle" style={{ color: "#f0a030" }}>
+                <div className="subtitle" style={{ color: "var(--warn)" }}>
                   {inOrbit.length} Kompanie(n) im Orbit - Landung erst ohne feindliche Schiffe im System.
                 </div>
               ) : (
@@ -1454,7 +1454,7 @@ function TurnPanel({
             {sup && (
               <div className="subtitle" style={{ marginTop: 8 }}>
                 Einkommen nächster Zug: +{sup.total} aus {sup.supplied} versorgten Systemen
-                {sup.cut > 0 && <span style={{ color: "#f0a030" }}> · {sup.cut} ohne Nachschub</span>}
+                {sup.cut > 0 && <span style={{ color: "var(--warn)" }}> · {sup.cut} ohne Nachschub</span>}
               </div>
             )}
             <div className="button-row" style={{ marginTop: 8 }}>

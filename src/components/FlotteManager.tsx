@@ -271,7 +271,7 @@ export default function FlotteManager({ user }: { user: PanelUser }) {
                     {fleetOf(s)?.name ?? "-"}
                     {fleetOf(s)?.flagshipId === s.id ? " (Flagge)" : ""}
                   </td>
-                  <td style={{ textAlign: "right", color: s.hull > 50 ? "var(--text)" : s.hull > 25 ? "#d8c95a" : "#f05046" }}>
+                  <td style={{ textAlign: "right", color: s.hull > 50 ? "var(--text)" : s.hull > 25 ? "var(--warn)" : "var(--bad)" }}>
                     {s.hull} %
                   </td>
                   <td style={{ textAlign: "right" }}>{s.distanceKm !== null ? `${s.distanceKm} km` : "-"}</td>
@@ -414,7 +414,7 @@ export default function FlotteManager({ user }: { user: PanelUser }) {
                 </p>
 
                 {ship.mapShip ? (
-                  <div className="notice">
+                  <div className="notice info">
                     Das Map-Schiff steuern die Konsolen auf der Brücke. Umbenennen und Reparieren gehen hier.
                   </div>
                 ) : (

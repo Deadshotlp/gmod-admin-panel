@@ -13,8 +13,8 @@ export default async function HomePage() {
   if (dbMissing.length > 0) {
     return (
       <div className="login-wrap">
-        <div className="login-box" style={{ textAlign: "left" }}>
-          <h1>Einrichtung nötig</h1>
+        <div className="login-box">
+          <h1 style={{ marginTop: 0 }}>Einrichtung nötig</h1>
           <p className="subtitle">
             Diese Werte fehlen in der <span className="mono">.env</span>:
           </p>
@@ -38,8 +38,8 @@ export default async function HomePage() {
   } catch (error) {
     return (
       <div className="login-wrap">
-        <div className="login-box" style={{ textAlign: "left" }}>
-          <h1>Datenbank nicht erreichbar</h1>
+        <div className="login-box">
+          <h1 style={{ marginTop: 0 }}>Datenbank nicht erreichbar</h1>
           <p className="subtitle">
             Das Panel kommt nicht an <span className="mono">{process.env.DB_HOST}</span>.
             Die Datenbank liegt im lokalen Netz — läuft das Panel im selben Netz?
@@ -56,11 +56,6 @@ export default async function HomePage() {
 
   return (
     <Shell user={user} current="/">
-      <h1>Übersicht</h1>
-      <p className="subtitle">
-        Live-Status des Servers und Nachladen der Konfiguration.
-      </p>
-
       <Dashboard user={user} />
     </Shell>
   );

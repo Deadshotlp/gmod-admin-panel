@@ -245,7 +245,7 @@ export default function FortbildungManager({ user }: { user: PanelUser }) {
     <>
       {message && <Notice ok={message.ok}>{message.text}</Notice>}
 
-      <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", gap: 18 }}>
+      <div className="stack-mobile" style={{ display: "grid", gridTemplateColumns: "340px 1fr", gap: 18 }}>
         <div className="panel" style={{ alignSelf: "start" }}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
             <strong style={{ fontSize: 13 }}>KATALOG</strong>
@@ -395,7 +395,7 @@ export default function FortbildungManager({ user }: { user: PanelUser }) {
                     />
                   </Field>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
+                  <div className="stack-mobile" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
                     <Field label="Sortierung">
                       <input
                         type="number"
@@ -457,7 +457,7 @@ export default function FortbildungManager({ user }: { user: PanelUser }) {
                     />
                   </Field>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: 12 }}>
+                  <div className="stack-mobile" style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: 12 }}>
                     <Field label="Icon" hint="Material-Pfad, z. B. icon16/star.png oder icon16/medal_gold_1.png (Silkicons); leer = keins">
                       <input
                         value={f("icon")}
@@ -497,7 +497,7 @@ export default function FortbildungManager({ user }: { user: PanelUser }) {
                     drei Felder leer bedeutet: für jeden freigegeben.
                   </p>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                  <div className="stack-mobile" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
                     <Field label="Einheiten">
                       <input
                         value={f("units")}
@@ -524,7 +524,7 @@ export default function FortbildungManager({ user }: { user: PanelUser }) {
                     </Field>
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div className="stack-mobile" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                     <Field
                       label="Inhaber darf ausbilden"
                       hint="FB-Schlüssel der Kurse, die der Inhaber leiten darf"

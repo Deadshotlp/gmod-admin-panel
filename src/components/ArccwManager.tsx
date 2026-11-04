@@ -948,7 +948,7 @@ function Grid({
                             row.defaults[field.key],
                           )
                             ? "var(--border)"
-                            : "#3a86d4",
+                            : "var(--accent)",
                         }}
                       />
                     </td>
@@ -1100,7 +1100,7 @@ function ZoneEditor({
                         fontVariantNumeric: "tabular-nums",
                         borderColor: sameAsDefault(sheet[row.id]?.[field.key] ?? "", 1)
                           ? "var(--border)"
-                          : "#3a86d4",
+                          : "var(--accent)",
                       }}
                     />
                   </td>

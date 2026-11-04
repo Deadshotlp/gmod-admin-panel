@@ -313,13 +313,13 @@ export default function SpielerManager({ user }: { user: PanelUser }) {
       {message && <Notice ok={false}>{message}</Notice>}
       {result && <Notice ok={result.ok}>{result.text}</Notice>}
 
-      <div className="notice">
+      <div className="notice info">
         Die Einheitenzuordnung steht in <span className="mono">pd_characters</span>, der
         Server baut seinen Fraktionsbaum daraus. Nach dem Speichern lädt er die Charaktere
         neu und setzt verbundene Spieler sofort um.
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 400px", gap: 18 }}>
+      <div className="split">
         <div className="panel">
           <input
             value={search}
@@ -348,16 +348,12 @@ export default function SpielerManager({ user }: { user: PanelUser }) {
                 <tr
                   key={`${character.steamid64}-${character.char_id}`}
                   onClick={() => void open(character)}
-                  style={{
-                    cursor: "pointer",
-                    background: sameCharacter(selected, character)
-                      ? "var(--bg-hover)"
-                      : undefined,
-                  }}
+                  className={sameCharacter(selected, character) ? "selected" : undefined}
+                  style={{ cursor: "pointer" }}
                 >
-                  <td style={{ color: "var(--text)" }}>
-                    {character.char_name}
-                    <div className="mono" style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                  <td>
+                    <div style={{ color: "var(--text)", fontWeight: 500 }}>{character.char_name}</div>
+                    <div className="mono" style={{ fontSize: 12, color: "var(--text-muted)" }}>
                       {character.char_id}
                     </div>
                   </td>
@@ -385,35 +381,44 @@ export default function SpielerManager({ user }: { user: PanelUser }) {
             </p>
           ) : (
             <>
-              <h2 style={{ marginTop: 0 }}>
-                {selected.char_id} {selected.char_name}
-              </h2>
+              <div className="detail-head">
+                <span className="avatar lg" aria-hidden="true">
+                  {selected.char_name
+                    .split(/\s+/)
+                    .filter(Boolean)
+                    .slice(0, 2)
+                    .map((part) => part.charAt(0).toUpperCase())
+                    .join("") || "?"}
+                </span>
+                <div style={{ minWidth: 0 }}>
+                  <h2>{selected.char_name}</h2>
+                  <span className="mono">{selected.char_id}</span>
+                </div>
+              </div>
 
-              <table>
-                <tbody>
-                  {(
-                    [
-                      ["SteamID64", selected.steamid64],
-                      ["Rang", selected.char_rank || "-"],
-                      ["Job", selected.job_name || "-"],
-                      ["Einheit", selected.faction_unit || "-"],
-                      ["Untereinheit", selected.faction_subunit || "-"],
-                      ["Jobschlüssel", selected.faction_job || "-"],
-                      ["Credits", String(selected.char_money ?? 0)],
-                      ["Spielzeit", playtime(Number(selected.char_playtime))],
-                      ["Erstellt", selected.char_cratedate || "-"],
-                      ["Zuletzt gespielt", selected.char_lastplaytime || "-"],
-                    ] as const
-                  ).map(([label, value]) => (
-                    <tr key={label}>
-                      <td style={{ color: "var(--text-muted)", width: 140 }}>{label}</td>
-                      <td className="mono" style={{ fontSize: 12, color: "var(--text)" }}>
-                        {value}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <dl className="facts">
+                {(
+                  [
+                    ["SteamID64", selected.steamid64],
+                    ["Rang", selected.char_rank || "-"],
+                    ["Job", selected.job_name || "-"],
+                    ["Einheit", selected.faction_unit || "-"],
+                    ["Untereinheit", selected.faction_subunit || "-"],
+                    ["Jobschlüssel", selected.faction_job || "-"],
+                    ["Credits", String(selected.char_money ?? 0)],
+                    ["Spielzeit", playtime(Number(selected.char_playtime))],
+                    ["Erstellt", selected.char_cratedate || "-"],
+                    ["Zuletzt gespielt", selected.char_lastplaytime || "-"],
+                  ] as const
+                ).map(([label, value]) => (
+                  <div key={label} style={{ minWidth: 0 }}>
+                    <dt>{label}</dt>
+                    <dd className="mono" title={value}>
+                      {value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
 
               {canEdit && draft && (
                 <>
@@ -526,7 +531,7 @@ export default function SpielerManager({ user }: { user: PanelUser }) {
                     <button onClick={() => setDraft(draftFrom(selected))} disabled={busy}>
                       Zurücksetzen
                     </button>
-                    <button onClick={() => void remove()} disabled={busy}>
+                    <button className="danger" onClick={() => void remove()} disabled={busy}>
                       Charakter löschen
                     </button>
                   </div>

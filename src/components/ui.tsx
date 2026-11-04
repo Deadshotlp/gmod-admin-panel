@@ -9,13 +9,14 @@ import type { CSSProperties, ReactNode } from "react";
 
 export const inputStyle: CSSProperties = {
   width: "100%",
-  padding: "8px 10px",
-  background: "var(--bg-panel-light)",
-  border: "1px solid var(--border)",
-  borderRadius: 4,
+  padding: "7px 12px",
+  background: "var(--input)",
+  border: "1px solid var(--border-2)",
+  borderRadius: 8,
   color: "var(--text)",
   font: "inherit",
-  fontSize: 14,
+  fontSize: 13.5,
+  lineHeight: "20px",
 };
 
 export function Field({
@@ -28,14 +29,10 @@ export function Field({
   children: ReactNode;
 }) {
   return (
-    <div style={{ marginBottom: 12 }}>
+    <div className="field">
       <div className="card-label">{label}</div>
       {children}
-      {hint && (
-        <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
-          {hint}
-        </div>
-      )}
+      {hint && <div className="field-hint">{hint}</div>}
     </div>
   );
 }
@@ -52,17 +49,7 @@ export function Check({
   disabled?: boolean;
 }) {
   return (
-    <label
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 7,
-        fontSize: 14,
-        color: "var(--text-dim)",
-        cursor: disabled ? "default" : "pointer",
-        marginBottom: 8,
-      }}
-    >
+    <label className={disabled ? "check disabled" : "check"}>
       <input
         type="checkbox"
         checked={checked}

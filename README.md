@@ -48,6 +48,32 @@ Starten:
 npm run dev
 ```
 
+## Erscheinungsbild
+
+Das Panel ist neutral gestaltet, damit es bei jeder Community passt. Name,
+Kürzel, Logo und Akzentfarbe kommen aus der `.env` (alle optional):
+
+| Variable | Wirkung | Standard |
+|---|---|---|
+| `PANEL_NAME` | Titel in Seitenleiste, Login und Browser-Tab | `Serververwaltung` |
+| `PANEL_COMMUNITY` | Name der Community unter dem Titel | leer |
+| `PANEL_MARK` | Kürzel im Logo-Feld, 1–3 Zeichen | aus dem Community-Namen |
+| `PANEL_LOGO` | Logo-Datei unter `public/`, z. B. `/logo.svg` | Kürzel statt Logo |
+| `PANEL_ACCENT` | Akzentfarbe als `#rrggbb` | Violett `#6656e3` |
+
+Das Logo muss auf dem Panel selbst liegen: die Content-Security-Policy lässt
+keine fremden Bildquellen zu. Die Akzentfarbe gilt im hellen und im dunklen
+Modus gleich – sie sollte auf beiden Hintergründen gut lesbar sein.
+
+Jeder Benutzer kann oben rechts zwischen hellem und dunklem Modus wechseln
+und die Seitenleiste einklappen; beides merkt sich der Browser. `Strg + K`
+öffnet die Schnellsuche über alle Bereiche. Auf dem Handy wird die
+Seitenleiste zur Schublade.
+
+Alle Farben stehen als Variablen oben in `src/app/globals.css`. Die Schrift
+ist Geist, eingebunden über das Paket `geist` – sie liegt damit auf dem
+Panel selbst, ohne Anfrage an Google.
+
 ## Deployen auf Pelican / Pterodactyl
 
 Als generischer NodeJS-Server. Wichtig sind zwei Einstellungen:

@@ -53,9 +53,9 @@ interface Report {
 }
 
 const STATUS_COLOR: Record<string, string> = {
-  offen: "var(--accent-red, #d9534f)",
-  "in Arbeit": "var(--accent-orange, #f0ad4e)",
-  erledigt: "var(--accent-green, #5cb85c)",
+  offen: "var(--bad)",
+  "in Arbeit": "var(--warn)",
+  erledigt: "var(--ok)",
   abgelehnt: "var(--text-muted)",
 };
 
@@ -157,7 +157,7 @@ function Detail({ id, statuses, onChanged }: { id: number; statuses: string[]; o
       <div className="card-label">Beschreibung</div>
       <p style={{ whiteSpace: "pre-wrap", marginTop: 0 }}>{report.description}</p>
 
-      <div style={{ display: "grid", gridTemplateColumns: "180px 1fr auto", gap: 10, alignItems: "end", marginBottom: 14 }}>
+      <div className="stack-mobile" style={{ display: "grid", gridTemplateColumns: "180px 1fr auto", gap: 10, alignItems: "end", marginBottom: 14 }}>
         <div>
           <div className="card-label">Status</div>
           <select value={status} onChange={(e) => setStatus(e.target.value)} style={inputStyle}>

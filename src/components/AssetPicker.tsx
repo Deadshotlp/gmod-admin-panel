@@ -165,9 +165,9 @@ export default function AssetPicker({
                   borderRadius: 3,
                   fontSize: 12,
                   fontFamily: "Consolas, monospace",
-                  background: missing ? "rgba(200, 80, 60, 0.14)" : "var(--bg-panel-light)",
-                  border: `1px solid ${missing ? "rgba(200, 80, 60, 0.55)" : "var(--border)"}`,
-                  color: missing ? "#e08a78" : "var(--text-dim)",
+                  background: missing ? "var(--bad-tint)" : "var(--bg-panel-light)",
+                  border: `1px solid ${missing ? "color-mix(in srgb, var(--bad) 55%, transparent)" : "var(--border)"}`,
+                  color: missing ? "var(--bad)" : "var(--text-dim)",
                 }}
               >
                 {missing && <span aria-hidden="true">!</span>}
@@ -197,7 +197,7 @@ export default function AssetPicker({
       )}
 
       {unknown.length > 0 && (
-        <div style={{ fontSize: 12, color: "#e08a78" }}>
+        <div style={{ fontSize: 12, color: "var(--bad)" }}>
           {unknown.length === 1
             ? `${unknown[0]} ist auf dem Server nicht installiert.`
             : `${unknown.length} Einträge sind auf dem Server nicht installiert.`}

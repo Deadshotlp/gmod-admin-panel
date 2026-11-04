@@ -199,7 +199,7 @@ export default function NavalTextures({ user }: { user: PanelUser }) {
                   </td>
                   <td>{b.systemName}</td>
                   <td>{TYPE_LABEL[(b.material.match(/planets\/(\w+)\//) ?? [])[1] ?? ""] ?? "-"}</td>
-                  <td style={{ color: b.typeSource === "estimated" ? "#d8c95a" : undefined }}>
+                  <td style={{ color: b.typeSource === "estimated" ? "var(--warn)" : undefined }}>
                     {b.typeSource === "estimated" ? "geschätzt" : b.typeSource ?? "-"}
                   </td>
                 </tr>
@@ -242,7 +242,7 @@ export default function NavalTextures({ user }: { user: PanelUser }) {
                       <strong>Klima:</strong> {selected.climate.replace(/\*/g, " ").trim()}
                     </div>
                   )}
-                  {selected.override && <div style={{ color: "#d8c95a", marginTop: 6 }}>Textur ist überschrieben.</div>}
+                  {selected.override && <div style={{ color: "var(--warn)", marginTop: 6 }}>Textur ist überschrieben.</div>}
                 </div>
               </div>
 
